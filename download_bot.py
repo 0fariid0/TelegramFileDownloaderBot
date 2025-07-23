@@ -1,4 +1,7 @@
-from token import TOKEN  # <--- این خط اضافه شده است
+#
+# فایل: download_bot.py
+#
+from token import TOKEN  # توکن از این فایل خوانده می‌شود
 import os
 import requests
 import logging
@@ -20,9 +23,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# این خط دیگر لازم نیست چون توکن از فایل token.py خوانده می‌شود
-# TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 
 # تعریف حالت‌های مکالمه برای ConversationHandler
 WAITING_URL, DOWNLOADING = range(2)
@@ -63,7 +63,9 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             filename = "downloaded_file"
             if "content-disposition" in r.headers:
                 cd = r.headers.get('content-disposition')
-                filename = cd.split('filename=')[-1].strip('"')
+                # Handles both "filename=file.zip" and 'filename="file.zip"'
+                if 'filename=' in cd:
+                    filename = cd.split('filename=')[-1].strip(' "')
             else:
                 filename = url.split('/')[-1].split('?')[0] or filename
         
@@ -105,29 +107,23 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
             with open(filename, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
-                    # بررسی اینکه آیا کاربر عملیات را لغو کرده است
                     if context.user_data.get('cancel_download'):
-                        await context.bot.edit_message_text(
-                            "عملیات دانلود توسط شما لغو شد.",
-                            chat_id=chat_id,
-                            message_id=message_id
-                        )
+                        await context.bot.edit_message_text("عملیات دانلود توسط شما لغو شد.", chat_id=chat_id, message_id=message_id)
                         return ConversationHandler.END
 
                     f.write(chunk)
                     downloaded_size += len(chunk)
                     current_time = time.time()
 
-                    # به‌روزرسانی نوار پیشرفت هر ۲ ثانیه یک‌بار برای جلوگیری از اسپم API
                     if current_time - last_update_time > 2:
                         last_update_time = current_time
                         await update_progress(context, message_id, chat_id, downloaded_size, total_size, filename)
             
         logger.info(f"فایل {filename} با موفقیت دانلود شد.")
-        
         await context.bot.edit_message_text("✅ دانلود کامل شد. در حال آپلود فایل برای شما...", chat_id=chat_id, message_id=message_id)
         
-        await context.bot.send_document(chat_id=chat_id, document=open(filename, 'rb'))
+        with open(filename, 'rb') as f:
+            await context.bot.send_document(chat_id=chat_id, document=f)
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
 
     except Exception as e:
@@ -155,15 +151,8 @@ async def update_progress(context: ContextTypes.DEFAULT_TYPE, message_id, chat_i
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
-        await context.bot.edit_message_text(
-            text=text,
-            chat_id=chat_id,
-            message_id=message_id,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+        await context.bot.edit_message_text(text=text, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup, parse_mode='Markdown')
     except Exception as e:
-        # ممکن است پیام تغییری نکرده باشد، این خطا طبیعی است
         if "Message is not modified" not in str(e):
             logger.warning(f"خطا در آپدیت نوار پیشرفت: {e}")
 
@@ -171,20 +160,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """عملیات دانلود را لغو می‌کند."""
     query = update.callback_query
     await query.answer("در حال لغو کردن...")
-    
-    if context.user_data.get('status_message_id'):
-        context.user_data['cancel_download'] = True
-    else:
-        # اگر دانلود هنوز شروع نشده بود
-        await query.edit_message_text("عملیات لغو شد.")
-        return ConversationHandler.END
-    return DOWNLOADING # در همین حالت می‌ماند تا حلقه دانلود آن را تشخیص دهد
-
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """در صورت بروز خطا یا اتمام مکالمه، وضعیت را پاک می‌کند."""
-    context.user_data.clear()
-    return ConversationHandler.END
-
+    context.user_data['cancel_download'] = True
+    return DOWNLOADING
 
 def main() -> None:
     """ربات را راه‌اندازی می‌کند."""
@@ -196,8 +173,8 @@ def main() -> None:
             WAITING_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_url)],
             DOWNLOADING: [CallbackQueryHandler(cancel, pattern='^cancel$')]
         },
-        fallbacks=[CommandHandler("start", start)], # با دستور استارت مجدد، ریست می‌شود
-        conversation_timeout=300 # مکالمه پس از ۵ دقیقه عدم فعالیت، تمام می‌شود
+        fallbacks=[CommandHandler("start", start)],
+        conversation_timeout=300
     )
 
     application.add_handler(conv_handler)
