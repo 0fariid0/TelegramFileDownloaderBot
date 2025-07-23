@@ -3,6 +3,7 @@
 INSTALL_DIR="/opt/telegram_downloader_bot"
 SERVICE_NAME="telegramdownloaderbot"
 PYTHON_SCRIPT="download_bot.py"
+GITHUB_REPO="https://github.com/0fariid0/TelegramFileDownloaderBot.git" # آدرس گیت‌هاب شما
 
 # Function to display the menu
 show_menu() {
@@ -33,8 +34,18 @@ install_bot() {
     rm -rf "$INSTALL_DIR" || true
   fi
 
-  # Run the actual installation script
-  bash "$(dirname "$0")/install_downloader_bot.sh"
+  # Clone the repository
+  echo "Cloning the repository from $GITHUB_REPO to $INSTALL_DIR..."
+  git clone "$GITHUB_REPO" "$INSTALL_DIR" || { echo "❌ Failed to clone repository."; read -p "⏎ Press Enter to return to the menu..." _; return 1; }
+  
+  # Go into the installed directory to run the actual install script
+  cd "$INSTALL_DIR" || exit
+
+  # Run the actual installation script within the cloned directory
+  bash install_downloader_bot.sh
+  
+  cd - > /dev/null # Go back to previous directory silently
+
   echo "✅ Installation completed successfully."
   read -p "⏎ Press Enter to return to the menu..." _
 }
@@ -54,17 +65,22 @@ configure_bot() {
   read -p "⏎ Press Enter to return to the menu..." _
 }
 
-# Function to update the bot (currently just restarting service or reinstalling)
+# Function to update the bot (pulling latest changes from git)
 update_bot() {
-  echo "🔄 Updating the bot..."
-  if [ -d "$INSTALL_DIR" ]; then
-    echo "No direct Git update for this simple bot. Reinstalling to update files."
-    install_bot # For this simple bot, re-running install is the easiest "update"
+  if [ ! -d "$INSTALL_DIR/.git" ]; then
+    echo "⚠️ Git repository not found in $INSTALL_DIR. Please install the bot first."
   else
-    echo "⚠️ Bot not installed. Please install the bot first."
+    echo "🔄 Updating the bot to the latest version..."
+    cd "$INSTALL_DIR" || exit
+    git pull origin main || { echo "❌ Failed to update repository. Check for local changes or network issues."; read -p "⏎ Press Enter to return to the menu..." _; cd - > /dev/null; return 1; }
+    echo "🔄 Restarting the bot service..."
+    systemctl restart "$SERVICE_NAME"
+    echo "✅ Bot updated and restarted successfully."
+    cd - > /dev/null # Go back to previous directory silently
   fi
   read -p "⏎ Press Enter to return to the menu..." _
 }
+
 
 # Function to uninstall the bot
 uninstall_bot() {
