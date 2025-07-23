@@ -39,8 +39,13 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text("❌ لینک نامعتبر است. لطفاً یک لینک با http یا https ارسال کنید.")
         return WAITING_URL
 
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    context.user_data['headers'] = headers
+
     try:
-        with requests.head(url, allow_redirects=True, timeout=10) as r:
+        with requests.head(url, allow_redirects=True, timeout=10, headers=headers) as r:
             r.raise_for_status()
             content_length = r.headers.get('content-length')
             if content_length and int(content_length) > MAX_FILE_SIZE:
@@ -78,11 +83,12 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     url = context.user_data['url']
     filename = context.user_data['filename']
+    headers = context.user_data['headers']
     chat_id = update.effective_chat.id
     message_id = context.user_data['status_message_id']
 
     try:
-        with requests.get(url, stream=True, timeout=60) as r:
+        with requests.get(url, stream=True, timeout=60, headers=headers) as r:
             r.raise_for_status()
             total_size = int(r.headers.get('content-length', 0))
             downloaded_size = 0
