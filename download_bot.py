@@ -1,3 +1,4 @@
+from token import TOKEN  # <--- این خط اضافه شده است
 import os
 import requests
 import logging
@@ -20,9 +21,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# توکن ربات خود را اینجا قرار دهید
-# این مقدار توسط اسکریپت نصب جایگذاری خواهد شد
-TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+# این خط دیگر لازم نیست چون توکن از فایل token.py خوانده می‌شود
+# TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 
 # تعریف حالت‌های مکالمه برای ConversationHandler
 WAITING_URL, DOWNLOADING = range(2)
