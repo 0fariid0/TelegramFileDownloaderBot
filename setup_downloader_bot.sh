@@ -3,7 +3,7 @@
 INSTALL_DIR="/opt/telegram_downloader_bot"
 SERVICE_NAME="telegramdownloaderbot"
 PYTHON_SCRIPT="download_bot.py"
-GITHUB_REPO="https://github.com/0fariid0/TelegramFileDownloaderBot.git" # آدرس گیت‌هاب شما
+GITHUB_REPO="https://github.com/0fariid0/TelegramFileDownloaderBot.git" # آدرس گیت‌هاب شما 
 
 # Function to display the menu
 show_menu() {
@@ -35,14 +35,14 @@ install_bot() {
   fi
 
   # Clone the repository
-  echo "Cloning the repository from $GITHUB_REPO to $INSTALL_DIR..."
-  git clone "$GITHUB_REPO" "$INSTALL_DIR" || { echo "❌ Failed to clone repository."; read -p "⏎ Press Enter to return to the menu..." _; return 1; }
+  echo "Cloning the repository from $GITHUB_REPO to $INSTALL_DIR..." 
+  git clone "$GITHUB_REPO" "$INSTALL_DIR" || { echo "❌ Failed to clone repository."; read -p "⏎ Press Enter to return to the menu..." _; return 1; } 
   
   # Go into the installed directory to run the actual install script
-  cd "$INSTALL_DIR" || exit
+  cd "$INSTALL_DIR" || exit 
 
   # Run the actual installation script within the cloned directory
-  bash install_downloader_bot.sh
+  bash install_downloader_bot.sh 
   
   cd - > /dev/null # Go back to previous directory silently
 
