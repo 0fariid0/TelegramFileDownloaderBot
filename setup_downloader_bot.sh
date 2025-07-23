@@ -1,12 +1,8 @@
 #!/bin/bash
-#
-# فایل: setup_downloader_bot.sh
-#
 INSTALL_DIR="/opt/telegram_downloader_bot"
 SERVICE_NAME="telegramdownloaderbot"
 GITHUB_REPO="https://github.com/0fariid0/TelegramFileDownloaderBot.git"
 
-# Function to display the menu
 show_menu() {
   clear
   echo "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
@@ -22,7 +18,6 @@ show_menu() {
   read -p "Your choice: " choice
 }
 
-# Function to install the bot
 install_bot() {
   echo "📦 Installing the bot..."
   if [ -d "$INSTALL_DIR" ]; then
@@ -42,14 +37,13 @@ install_bot() {
   read -p "⏎ Press Enter to return to the menu..." _
 }
 
-# Function to configure the bot token
 configure_bot() {
   if [ ! -d "$INSTALL_DIR" ]; then
     echo "⚠️ Bot is not installed. Please install it first."
   else
     cd "$INSTALL_DIR" || exit
     read -p "Enter your new Telegram Bot Token: " new_bot_token
-    echo "TOKEN = \"$new_bot_token\"" > token.py
+    echo "TOKEN = \"$new_bot_token\"" > bot_config.py
     echo "🔄 Restarting the bot service..."
     systemctl restart "$SERVICE_NAME"
     echo "✅ Bot token updated and service restarted."
@@ -58,7 +52,6 @@ configure_bot() {
   read -p "⏎ Press Enter to return to the menu..." _
 }
 
-# Function to update the bot
 update_bot() {
   if [ ! -d "$INSTALL_DIR/.git" ]; then
     echo "⚠️ Git repository not found. Please install the bot first."
@@ -66,7 +59,7 @@ update_bot() {
     echo "🔄 Updating the bot to the latest version..."
     cd "$INSTALL_DIR" || exit
     
-    echo "Stashing local changes (like token.py)..."
+    echo "Stashing local changes (like bot_config.py)..."
     git stash
     
     echo "Pulling latest changes from GitHub..."
@@ -93,7 +86,6 @@ update_bot() {
   read -p "⏎ Press Enter to return to the menu..." _
 }
 
-# Function to uninstall the bot
 uninstall_bot() {
   read -p "Are you sure you want to uninstall the bot completely? (y/n): " confirm
   if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
@@ -110,7 +102,6 @@ uninstall_bot() {
   read -p "⏎ Press Enter to return to the menu..." _
 }
 
-# Main loop
 while true; do
   show_menu
   case $choice in
