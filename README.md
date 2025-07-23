@@ -9,5 +9,6 @@
 
 در ترمینال لینوکس (Ubuntu/Debian) فقط این دستور را وارد کنید:
 
-```bash
-bash <(curl -Ls [https://raw.githubusercontent.com/0fariid0/TelegramFileDownloaderBot/main/setup_downloader_bot.sh](https://raw.githubusercontent.com/0fariid0/TelegramFileDownloaderBot/main/setup_downloader_bot.sh))
+```
+bash <(curl -Ls https://raw.githubusercontent.com/0fariid0/TelegramFileDownloaderBot/main/setup_downloader_bot.sh)
+```
