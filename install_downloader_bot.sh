@@ -7,9 +7,9 @@ read -p "Enter your Telegram Bot Token: " bot_token
 echo "TOKEN = \"$bot_token\"" > bot_config.py
 echo "✅ Bot token saved to bot_config.py"
 
-echo "Installing system dependencies (python3-venv, git)..."
+echo "Installing system dependencies (python3-venv, git, ffmpeg)..."
 apt update -y > /dev/null
-apt install python3-venv git -y > /dev/null
+apt install python3-venv git ffmpeg -y > /dev/null
 
 echo "Creating Python virtual environment and installing dependencies..."
 python3 -m venv venv
