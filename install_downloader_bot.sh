@@ -11,20 +11,19 @@ PYTHON_SCRIPT="download_bot.py"
 # گرفتن اطلاعات از کاربر
 read -p "Enter your Telegram Bot Token: " bot_token
 
-# ایجاد دایرکتوری نصب
-echo "Creating installation directory: $INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
-cd "$INSTALL_DIR" || exit
+# دایرکتوری نصب توسط setup_downloader_bot.sh ایجاد و کلون شده است، پس فقط به آن cd می‌کنیم
+# mkdir -p "$INSTALL_DIR" # این خط دیگر لازم نیست
+# cd "$INSTALL_DIR" || exit # این cd در setup_downloader_bot.sh انجام شده است
 
 # کپی کردن فایل‌های ربات و requirements
-echo "Copying bot files..."
-# فرض می‌کنیم اسکریپت install_downloader_bot.sh و فایل‌های bot.py و requirements.txt در یک دایرکتوری هستند
-# اگر در دایرکتوری فعلی نیستند، باید مسیرهای کامل را مشخص کنید
-cp "$(dirname "$0")/$PYTHON_SCRIPT" "$INSTALL_DIR/"
-cp "$(dirname "$0")/requirements.txt" "$INSTALL_DIR/"
+# این خطوط دیگر لازم نیستند زیرا فایل‌ها توسط git clone از قبل در $INSTALL_DIR موجودند.
+# cp "$(dirname "$0")/$PYTHON_SCRIPT" "$INSTALL_DIR/"
+# cp "$(dirname "$0")/requirements.txt" "$INSTALL_DIR/"
 
 # جایگزینی توکن در فایل پایتون
 echo "Updating bot token in $PYTHON_SCRIPT..."
+# چون اسکریپت install_downloader_bot.sh اکنون داخل $INSTALL_DIR اجرا می‌شود،
+# نیازی به استفاده از $(dirname "$0") برای مسیردهی به $PYTHON_SCRIPT نیست.
 sed -i "s|TOKEN = \"YOUR_TELEGRAM_BOT_TOKEN\"|TOKEN = \"$bot_token\"|" "$PYTHON_SCRIPT"
 
 echo "✅ Bot token updated successfully."
@@ -39,7 +38,7 @@ echo "Creating Python virtual environment and installing dependencies..."
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements.txt # requirements.txt نیز در همین دایرکتوری است
 deactivate
 
 echo "✅ Python dependencies installed."
