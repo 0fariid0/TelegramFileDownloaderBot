@@ -94,7 +94,7 @@ async def format_selection_callback(update: Update, context: ContextTypes.DEFAUL
     choice = query.data
     url = context.chat_data.get('active_url')
     title = context.chat_data.get('active_title', 'downloaded_file')
-    chat_id = query.effective_chat.id
+    chat_id = query.message.chat_id
     
     if choice == 'cancel_info':
         await query.edit_message_text("عملیات لغو شد.")
