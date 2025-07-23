@@ -3,6 +3,7 @@ import os
 import requests
 import logging
 import time
+import urllib.parse
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -52,13 +53,21 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 await update.message.reply_text(f"❌ حجم فایل بیشتر از ۵۰ مگابایت است و قابل ارسال نیست.")
                 return WAITING_URL
 
-            filename = "downloaded_file"
+            filename = None
             if "content-disposition" in r.headers:
                 cd = r.headers.get('content-disposition')
                 if 'filename=' in cd:
-                    filename = cd.split('filename=')[-1].strip(' "')
-            else:
-                filename = url.split('/')[-1].split('?')[0] or filename
+                    extracted_name = cd.split('filename=')[-1].strip(' "')
+                    if extracted_name:
+                        filename = extracted_name
+            
+            if not filename:
+                parsed_name = urllib.parse.unquote(url.split('/')[-1].split('?')[0])
+                if parsed_name:
+                    filename = parsed_name
+
+            if not filename:
+                filename = "downloaded_file"
         
         context.user_data['url'] = url
         context.user_data['filename'] = filename
@@ -99,11 +108,9 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                     if context.user_data.get('cancel_download'):
                         await context.bot.edit_message_text("عملیات دانلود توسط شما لغو شد.", chat_id=chat_id, message_id=message_id)
                         return ConversationHandler.END
-
                     f.write(chunk)
                     downloaded_size += len(chunk)
                     current_time = time.time()
-
                     if current_time - last_update_time > 2:
                         last_update_time = current_time
                         await update_progress(context, message_id, chat_id, downloaded_size, total_size, filename)
