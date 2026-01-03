@@ -1,171 +1,155 @@
 from bot_config import TOKEN
-import os
-import requests
-import logging
-import time
-import urllib.parse
-import asyncio
+import os, asyncio, aiohttp, logging, time, urllib.parse, math, subprocess
 from collections import deque
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    CallbackQueryHandler
+    Application, CommandHandler, MessageHandler,
+    filters, ContextTypes, CallbackQueryHandler
 )
 
-# --- راه‌اندازی اولیه ---
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# ---------------- CONFIG ----------------
+MAX_FILE_SIZE = 45 * 1024 * 1024
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
-
-# --- توابع اصلی ---
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """دستور /start را مدیریت می‌کند."""
-    user = update.effective_user
-    await update.message.reply_html(
-        f"سلام {user.mention_html()}! 👋\n\n"
-        f"می‌توانید یک یا چند لینک مستقیم برای دانلود ارسال کنید. من آنها را در صف قرار داده و یکی پس از دیگری دانلود خواهم کرد.",
-    )
-
-def initialize_chat_data(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """اطلاعات اولیه مورد نیاز برای هر چت را مقداردهی می‌کند."""
-    if 'download_queue' not in context.chat_data:
-        context.chat_data['download_queue'] = deque()
-    if 'is_downloading' not in context.chat_data:
-        context.chat_data['is_downloading'] = False
-
-async def handle_new_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """لینک جدید را به صف اضافه کرده و در صورت بیکار بودن، پردازش را شروع می‌کند."""
-    initialize_chat_data(context)
-    url = update.message.text
-
-    if not url.startswith(('http://', 'https://')):
-        await update.message.reply_text("❌ این یک لینک معتبر به نظر نمی‌رسد.")
-        return
-
-    context.chat_data['download_queue'].append(url)
-    queue_position = len(context.chat_data['download_queue'])
+# ---------------- BASIC ----------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"✅ لینک به صف اضافه شد (موقعیت شما در صف: {queue_position})."
+        "👋 لینک دانلود بفرست\n"
+        "✔ پشتیبانی از فایل بزرگ\n"
+        "✔ ادامه دانلود\n"
+        "✔ لغو عملیات"
     )
 
-    if not context.chat_data.get('is_downloading', False):
-        asyncio.create_task(process_queue(update.effective_chat.id, context))
+def init_chat(context):
+    context.chat_data.setdefault("queue", deque())
+    context.chat_data.setdefault("downloading", False)
+    context.chat_data.setdefault("cancel", False)
 
-async def process_queue(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """اولین آیتم در صف را پردازش (دانلود) می‌کند."""
-    initialize_chat_data(context)
+# ---------------- FILE UTILS ----------------
+def split_file(path):
+    parts = []
+    with open(path, "rb") as f:
+        i = 1
+        while chunk := f.read(MAX_FILE_SIZE):
+            p = f"{path}.part{i:02d}"
+            with open(p, "wb") as pf:
+                pf.write(chunk)
+            parts.append(p)
+            i += 1
+    return parts
 
-    if context.chat_data['is_downloading']:
-        return
+def compress_video(inp, out):
+    subprocess.run([
+        "ffmpeg", "-y", "-i", inp,
+        "-vcodec", "libx264", "-preset", "fast",
+        "-b:v", "800k", "-acodec", "aac", out
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    if not context.chat_data['download_queue']:
-        logger.info("صف دانلود خالی است. پردازش متوقف شد.")
-        return
+# ---------------- DOWNLOAD ----------------
+async def download_with_resume(url, path, msg, context):
+    downloaded = os.path.getsize(path) if os.path.exists(path) else 0
+    headers = {"Range": f"bytes={downloaded}-"} if downloaded else {}
 
-    context.chat_data['is_downloading'] = True
-    url = context.chat_data['download_queue'].popleft()
-    
-    logger.info(f"شروع پردازش لینک از صف: {url}")
-
-    status_message = await context.bot.send_message(chat_id, f"⏳ در حال پردازش لینک:\n`{url}`", parse_mode='Markdown')
-    
-    filename = "downloaded_file"
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        
-        with requests.head(url, allow_redirects=True, timeout=10, headers=headers) as r:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as r:
             r.raise_for_status()
-            content_length = r.headers.get('content-length')
-            if content_length and int(content_length) > MAX_FILE_SIZE:
-                raise ValueError(f"حجم فایل بیشتر از {MAX_FILE_SIZE // 1024 // 1024} مگابایت است.")
-
-            if "content-disposition" in r.headers:
-                cd = r.headers.get('content-disposition')
-                if 'filename=' in cd: filename = urllib.parse.unquote(cd.split('filename=')[-1].strip(' "'))
-            if filename == "downloaded_file":
-                filename = urllib.parse.unquote(url.split('/')[-1].split('?')[0]) or "downloaded_file"
-
-        context.chat_data['cancel_download'] = False
-        keyboard = [[InlineKeyboardButton("لغو عملیات ❌", callback_data='cancel_download')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await status_message.edit_text(f"شروع دانلود فایل:\n`{filename}`", reply_markup=reply_markup, parse_mode='Markdown')
-
-
-        with requests.get(url, stream=True, timeout=60, headers=headers) as r:
-            r.raise_for_status()
-            total_size = int(r.headers.get('content-length', 0))
-            downloaded_size = 0
-            last_update_time = 0
-            
-            with open(filename, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if context.chat_data.get('cancel_download', False):
-                        raise asyncio.CancelledError("دانلود توسط کاربر لغو شد.")
+            total = int(r.headers.get("Content-Length", 0)) + downloaded
+            with open(path, "ab") as f:
+                async for chunk in r.content.iter_chunked(1024 * 64):
+                    if context.chat_data["cancel"]:
+                        raise asyncio.CancelledError
                     f.write(chunk)
-                    downloaded_size += len(chunk)
-                    current_time = time.time()
-                    if total_size > 0 and current_time - last_update_time > 2:
-                        await update_progress(status_message, downloaded_size, total_size, filename)
-                        last_update_time = current_time
+                    downloaded += len(chunk)
+                    percent = downloaded * 100 / total
+                    if int(percent) % 5 == 0:
+                        try:
+                            await msg.edit_text(f"⬇️ دانلود {percent:.1f}%")
+                        except:
+                            pass
 
-        await status_message.edit_text("✅ دانلود کامل شد. در حال آپلود فایل...")
-        with open(filename, 'rb') as f:
-            await context.bot.send_document(chat_id=chat_id, document=f)
-        await status_message.delete()
+# ---------------- PROCESS QUEUE ----------------
+async def process_queue(chat_id, context):
+    if context.chat_data["downloading"]:
+        return
 
-    except asyncio.CancelledError as e:
-        await status_message.edit_text(f"❌ {e}")
-    except Exception as e:
-        logger.error(f"خطا در پردازش {url}: {e}")
-        await status_message.edit_text(f"متاسفانه در دانلود این فایل مشکلی پیش آمد:\n`{e}`")
-    finally:
-        if os.path.exists(filename):
-            os.remove(filename)
-        context.chat_data['is_downloading'] = False
-        # بلافاصله پردازش آیتم بعدی در صف را شروع کن
-        asyncio.create_task(process_queue(chat_id, context))
+    context.chat_data["downloading"] = True
 
-async def update_progress(message, downloaded, total, filename):
-    """پیام نوار پیشرفت را به‌روزرسانی می‌کند."""
-    percent = (downloaded / total) * 100
-    progress_bar = "█" * int(percent / 10) + "░" * (10 - int(percent / 10))
-    text = (
-        f"**در حال دانلود...**\n"
-        f"`{filename}`\n\n"
-        f"`{progress_bar}` {percent:.1f}%\n"
-        f"`{downloaded // 1024 // 1024}MB / {total // 1024 // 1024}MB`"
-    )
-    keyboard = [[InlineKeyboardButton("لغو عملیات ❌", callback_data='cancel_download')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    try:
-        await message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-    except Exception:
-        pass # از خطای Message is not modified جلوگیری می‌کند
+    while context.chat_data["queue"]:
+        url = context.chat_data["queue"].popleft()
+        context.chat_data["cancel"] = False
 
-async def cancel_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """عملیات دانلود فعلی را لغو می‌کند."""
-    context.chat_data['cancel_download'] = True
-    query = update.callback_query
-    await query.answer("در حال ارسال درخواست لغو...")
+        msg = await context.bot.send_message(chat_id, "⏳ شروع دانلود...")
+        filename = os.path.join(DOWNLOAD_DIR, f"{chat_id}_{int(time.time())}")
 
-def main() -> None:
-    """ربات را راه‌اندازی و اجرا می‌کند."""
-    application = Application.builder().token(TOKEN).build()
+        try:
+            await download_with_resume(url, filename, msg, context)
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_link))
-    application.add_handler(CallbackQueryHandler(cancel_download_callback, pattern='^cancel_download$'))
+            if url.lower().endswith(".mp4"):
+                await msg.edit_text("🎞 فشرده‌سازی ویدیو...")
+                compressed = filename + "_compressed.mp4"
+                await asyncio.get_event_loop().run_in_executor(
+                    None, compress_video, filename, compressed
+                )
+                os.remove(filename)
+                filename = compressed
 
-    application.run_polling()
+            await msg.edit_text("⬆️ در حال آپلود...")
 
-if __name__ == '__main__':
+            size = os.path.getsize(filename)
+            if size <= MAX_FILE_SIZE:
+                await context.bot.send_document(chat_id, open(filename, "rb"))
+            else:
+                parts = split_file(filename)
+                for i, p in enumerate(parts, 1):
+                    await context.bot.send_document(
+                        chat_id,
+                        document=open(p, "rb"),
+                        caption=f"📦 پارت {i}/{len(parts)}"
+                    )
+                    os.remove(p)
+
+            await msg.delete()
+
+        except asyncio.CancelledError:
+            await msg.edit_text("❌ دانلود لغو شد")
+        except Exception as e:
+            await msg.edit_text(f"❌ خطا: {e}")
+        finally:
+            if os.path.exists(filename):
+                os.remove(filename)
+
+    context.chat_data["downloading"] = False
+
+# ---------------- HANDLERS ----------------
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    init_chat(context)
+    url = update.message.text.strip()
+
+    if not url.startswith("http"):
+        return await update.message.reply_text("❌ لینک نامعتبر")
+
+    context.chat_data["queue"].append(url)
+    await update.message.reply_text("✅ به صف اضافه شد")
+
+    asyncio.create_task(process_queue(update.effective_chat.id, context))
+
+async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.chat_data["cancel"] = True
+    await update.callback_query.answer("لغو شد")
+
+# ---------------- MAIN ----------------
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+    app.add_handler(CallbackQueryHandler(cancel_download, pattern="cancel"))
+
+    app.run_polling()
+
+if __name__ == "__main__":
     main()
