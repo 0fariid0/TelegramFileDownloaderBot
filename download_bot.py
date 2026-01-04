@@ -205,76 +205,78 @@ async def finalize_dl(chat_id, context, res):
             is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
             file_size = os.path.getsize(file_path)
 
-            # --- بخش برش هوشمند و تبدیل به MP4 (تضمین ارسال همه پارت‌ها) ---
-            if file_size > CHUNK_SIZE:
-                await context.bot.edit_message_text("✂️ در حال تبدیل و برش ویدیو به پارت‌های MP4...", chat_id, chat_data['msg_id'])
+            # --- شروع بخش برش بر اساس حجم ۴۰ مگابایت ---
+if file_size > CHUNK_SIZE:
+    await context.bot.edit_message_text("✂️ در حال قطعه‌قطعه کردن هوشمند ویدیو (۴۰ مگابایتی)...", chat_id, chat_data['msg_id'])
+    
+    base_name, extension = os.path.splitext(chat_data['current_filename'])
+    if not extension: extension = ".mp4"
+    clean_name = "".join([c for c in base_name if c.isalnum()]).strip()
+    
+    temp_parts_dir = os.path.join(DOWNLOAD_DIR, f"parts_{chat_id}_{int(time.time())}")
+    os.makedirs(temp_parts_dir, exist_ok=True)
+
+    import subprocess
+    try:
+        # تنظیم دقیق روی 40 مگابایت (به بایت)
+        # 40 * 1024 * 1024 = 41943040 bytes
+        output_template = os.path.join(temp_parts_dir, f"Part_%03d_{clean_name}{extension}")
+        
+        command = [
+            'ffmpeg', '-y', '-i', file_path,
+            '-fs', '41943040', # محدودیت حجم هر پارت روی دقیقا 40 مگابایت
+            '-map', '0',
+            '-c', 'copy',      # کپی بدون انکود مجدد (بسیار سریع)
+            '-f', 'segment',
+            '-segment_size', '41943040', # برش بر اساس سایز
+            '-reset_timestamps', '1',
+            output_template
+        ]
+        
+        # اجرای دستور FFmpeg
+        subprocess.run(command, capture_output=True, check=True)
+        
+        # خواندن لیست پارت‌های تولید شده
+        generated_parts = sorted([f for f in os.listdir(temp_parts_dir) if f.startswith("Part_")])
+
+        if not generated_parts:
+            raise Exception("هیچ پارتی ایجاد نشد.")
+
+        total = len(generated_parts)
+        for i, p_file in enumerate(generated_parts, 1):
+            p_path = os.path.join(temp_parts_dir, p_file)
+            
+            # چک کردن برای لغو عملیات توسط کاربر
+            if chat_data.get('status') == 'cancelled': 
+                break
+            
+            # ارسال ویدیو
+            with open(p_path, 'rb') as tp:
+                caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {i} از {total} (حجم زیر ۴۰ مگ)"
                 
-                # ایجاد پوشه موقت اختصاصی
-                temp_parts_dir = os.path.join(DOWNLOAD_DIR, f"mp4_parts_{chat_id}_{int(time.time())}")
-                os.makedirs(temp_parts_dir, exist_ok=True)
+                await context.bot.send_video(
+                    chat_id, 
+                    video=tp, 
+                    caption=caption,
+                    supports_streaming=True, 
+                    parse_mode='Markdown',
+                    read_timeout=300, 
+                    write_timeout=300
+                )
+            
+            # حذف پارت ارسال شده برای آزاد سازی فضا
+            os.remove(p_path)
+            await asyncio.sleep(1.5) # وقفه کوتاه برای جلوگیری از اسپم
 
-                import subprocess
-                try:
-                    # استفاده از دستور fs برای محدود کردن دقیق حجم فایل خروجی
-                    # این دستور فایل را به پارت‌های حدوداً 47 مگابایتی تقسیم می‌کند
-                    output_template = os.path.join(temp_parts_dir, "Part_%03d.mp4")
-                    
-                    command = [
-                        'ffmpeg', '-y', '-i', file_path,
-                        '-c:v', 'libx264', '-crf', '23', # تبدیل به MP4 با کیفیت استاندارد
-                        '-c:a', 'aac',
-                        '-f', 'segment',
-                        '-segment_size', '47M', # محدودیت حجم هر پارت
-                        '-reset_timestamps', '1',
-                        '-map', '0',
-                        output_template
-                    ]
-                    
-                    # اجرای پردازش
-                    process = subprocess.run(command, capture_output=True, text=True)
-                    
-                    # لیست کردن پارت‌های تولید شده
-                    generated_parts = sorted([f for f in os.listdir(temp_parts_dir) if f.endswith(".mp4")])
-                    
-                    if not generated_parts:
-                        raise Exception("خطا در تولید پارت‌ها")
-
-                    total = len(generated_parts)
-                    for i, p_file in enumerate(generated_parts, 1):
-                        p_path = os.path.join(temp_parts_dir, p_file)
-                        
-                        # بررسی نهایی حجم (اگر باز هم بزرگ بود، از روش فشرده‌سازی سریع استفاده کن)
-                        if os.path.getsize(p_path) > 49.5 * 1024 * 1024:
-                             # این بخش برای اطمینان از عدم حذف پارت است
-                             # در اینجا پارت را کمی فشرده‌تر می‌کنیم
-                             pass 
-
-                        with open(p_path, 'rb') as tp:
-                            caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {i} از {total}"
-                            
-                            # ارسال به صورت ویدیو (MP4)
-                            await context.bot.send_video(
-                                chat_id, 
-                                video=tp, 
-                                caption=caption,
-                                supports_streaming=True, 
-                                parse_mode='Markdown',
-                                read_timeout=300, 
-                                write_timeout=300
-                            )
-                        
-                        os.remove(p_path)
-                        await asyncio.sleep(3) # وقفه برای جلوگیری از محدودیت تلگرام
-
-                except Exception as e:
-                    logging.error(f"MP4 Conversion Error: {e}")
-                    await context.bot.send_message(chat_id, "❌ خطا در پردازش ویدیو. لطفاً حجم فایل یا فرمت را بررسی کنید.")
-                
-                finally:
-                    import shutil
-                    if os.path.exists(temp_parts_dir):
-                        shutil.rmtree(temp_parts_dir)
-            # --- پایان بخش ---
+    except Exception as e:
+        logging.error(f"Error during splitting: {e}")
+        await context.bot.send_message(chat_id, "❌ خطا در برش ویدیو. لطفا دوباره تلاش کنید.")
+    
+    finally:
+        import shutil
+        if os.path.exists(temp_parts_dir): 
+            shutil.rmtree(temp_parts_dir)
+# --- پایان بخش برش ---
 
             # --- شروع بخش ارسال تک فایل ---
             else:
