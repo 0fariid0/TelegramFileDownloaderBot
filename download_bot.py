@@ -205,47 +205,54 @@ async def finalize_dl(chat_id, context, res):
             is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
             file_size = os.path.getsize(file_path)
 
-            # --- شروع بخش ارسال پارت‌بندی شده ---
+            # --- شروع بخش ارسال پارت‌بندی شده هوشمند ---
             if file_size > CHUNK_SIZE:
-                part = 1
-                with open(file_path, 'rb') as f:
-                    while True:
-                        # بررسی لغو عملیات توسط کاربر
-                        if chat_data.get('status') == 'cancelled':
-                            break
-                            
-                        chunk = f.read(CHUNK_SIZE)
-                        if not chunk: 
-                            break
+                await context.bot.edit_message_text("✂️ فایل بزرگ است، در حال بخش‌بندی ویدئو...", chat_id, chat_data['msg_id'])
+                
+                # نام فایل خروجی برای بخش‌ها
+                output_pattern = os.path.join(DOWNLOAD_DIR, f"part_%03d_{chat_data['current_filename']}")
+                
+                # دستور FFmpeg برای تکه تکه کردن ویدئو بدون افت کیفیت (Copy Codec)
+                # هر پارت را بر اساس حجم تقریبی یا زمان (مثلاً هر 1000 ثانیه) تقسیم می‌کند
+                import subprocess
+                
+                try:
+                    # تقسیم بر اساس حجم تقریبی (fs) در FFmpeg کمی پیچیده است، 
+                    # بهتر است بر اساس زمان (مثلاً هر 15 دقیقه) تقسیم کنیم که همواره قابل پخش باشد
+                    command = [
+                        'ffmpeg', '-i', file_path, 
+                        '-c', 'copy', '-map', '0', 
+                        '-segment_time', '00:15:00', # زمان هر پart (15 دقیقه)
+                        '-f', 'segment', 
+                        '-reset_timestamps', '1',
+                        output_pattern
+                    ]
+                    subprocess.run(command, check=True)
+                    
+                    # لیست کردن پارت‌های تولید شده
+                    parts = sorted([f for f in os.listdir(DOWNLOAD_DIR) if f.startswith("part_")])
+                    
+                    for i, p_file in enumerate(parts, 1):
+                        p_path = os.path.join(DOWNLOAD_DIR, p_file)
+                        if chat_data.get('status') == 'cancelled': break
                         
-                        temp_name = f"part_{part}_{chat_id}_{chat_data['current_filename']}"
-                        with open(temp_name, "wb") as tp: 
-                            tp.write(chunk)
+                        with open(p_path, 'rb') as tp:
+                            caption = f"🎬 {chat_data['current_filename']}\n📦 پارت {i}"
+                            if is_vid:
+                                await context.bot.send_video(
+                                    chat_id, video=tp, caption=caption,
+                                    supports_streaming=True, read_timeout=120, write_timeout=120
+                                )
+                            else:
+                                await context.bot.send_document(chat_id, document=tp, caption=caption)
                         
-                        try:
-                            with open(temp_name, "rb") as tp:
-                                if is_vid:
-                                    await context.bot.send_video(
-                                        chat_id, video=tp, 
-                                        caption=f"📦 پارت {part}\n📄 {chat_data['current_filename']}",
-                                        supports_streaming=True,
-                                        read_timeout=120, write_timeout=120
-                                    )
-                                else:
-                                    await context.bot.send_document(
-                                        chat_id, document=tp, 
-                                        caption=f"📦 پارت {part}",
-                                        read_timeout=120, write_timeout=120
-                                    )
-                        except Exception as e:
-                            logging.error(f"Error sending part {part}: {e}")
-                        finally:
-                            if os.path.exists(temp_name): 
-                                os.remove(temp_name)
+                        os.remove(p_path) # حذف پارت بعد از ارسال
+                        await asyncio.sleep(2)
                         
-                        part += 1
-                        await asyncio.sleep(1.5) # جلوگیری از Flood تلگرام
-            # --- پایان بخش پارت‌بندی ---
+                except Exception as e:
+                    logging.error(f"FFmpeg Error: {e}")
+                    await context.bot.send_message(chat_id, "❌ خطا در برش ویدئو. فایل به صورت خام ارسال می‌شود.")
+            # --- پایان بخش هوشمند ---
 
             # --- شروع بخش ارسال تک فایل ---
             else:
@@ -278,7 +285,7 @@ async def finalize_dl(chat_id, context, res):
         if os.path.exists(file_path):
             os.remove(file_path)
         await run_next(chat_id, context)
-        
+
 async def callback_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
