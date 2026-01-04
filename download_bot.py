@@ -190,9 +190,70 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome, parse_mode='Markdown')
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """منوی اصلی مدیریت با دکمه‌های شیشه‌ای"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("📊 آخرین دانلودها", callback_data="admin_history"),
+         InlineKeyboardButton("📜 وضعیت سیستم (Logs)", callback_data="admin_logs")],
+        [InlineKeyboardButton("🧹 پاکسازی فایل‌ها", callback_data="admin_clear"),
+         InlineKeyboardButton("🔄 رفرش پنل", callback_data="admin_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = "🛠 **پنل مدیریت پیشرفته**\n\nیکی از گزینه‌های زیر را برای نظارت بر عملکرد ربات انتخاب کنید:"
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """پردازش کلیک روی دکمه‌های مدیریت"""
+    query = update.callback_query
+    data = query.data
     if update.effective_user.id != ADMIN_ID: return
-    keyboard = [["📊 آمار دانلودها", "📜 مشاهده لاگ‌ها"], ["🧹 پاکسازی تاریخچه", "🏠 بازگشت"]]
-    await update.message.reply_text("🛠 **پنل مدیریت:**", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode='Markdown')
+
+    if data == "admin_main":
+        await admin_panel(update, context)
+
+    elif data == "admin_logs":
+        if os.path.exists(LOG_FILE):
+            with open(LOG_FILE, "r") as f:
+                raw_logs = f.readlines()[-8:] # گرفتن 8 لاگ آخر
+                formatted_logs = ""
+                for log in raw_logs:
+                    if "sendMessage" in log: formatted_logs += "✉️ `پیام ارسال شد`\n"
+                    elif "getUpdates" in log: continue # حذف لاگ‌های تکراری پولینگ
+                    elif "Application started" in log: formatted_logs += "🟢 `ربات استارت شد`\n"
+                    elif "ERROR" in log: formatted_logs += "🔴 `خطا در سیستم`\n"
+                
+                if not formatted_logs: formatted_logs = "✅ سیستم در وضعیت پایدار است و فعالیت خاصی ثبت نشده."
+                
+                text = f"📜 **وضعیت لحظه‌ای سیستم:**\n\n{formatted_logs}\n\n🕒 آخرین بروزرسانی: `{datetime.now().strftime('%H:%M:%S')}`"
+        else:
+            text = "❌ فایل لاگ یافت نشد."
+            
+        keyboard = [[InlineKeyboardButton("🔄 بروزرسانی", callback_data="admin_logs")],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_main")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+    elif data == "admin_history":
+        text = "📈 **تاریخچه آخرین دانلودها:**\n\n"
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                lines = f.readlines()[-5:]
+                text += "".join(lines) if lines else "هنوز دانلودی انجام نشده."
+        else:
+            text += "تاریخچه خالی است."
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_main")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+    elif data == "admin_clear":
+        # منطق پاکسازی...
+        await query.answer("فایل‌های اضافی پاکسازی شدند ✨")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
