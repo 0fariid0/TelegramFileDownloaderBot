@@ -205,71 +205,86 @@ async def finalize_dl(chat_id, context, res):
             is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
             file_size = os.path.getsize(file_path)
 
-            # --- شروع بخش هوشمند و نهایی برش ---
+            # --- شروع بخش هوشمند و اصلاح شده برش ---
             if file_size > CHUNK_SIZE:
-                await context.bot.edit_message_text("✂️ در حال بخش‌بندی فایل به قطعات استاندارد...", chat_id, chat_data['msg_id'])
+                status_msg = await context.bot.edit_message_text("✂️ در حال پردازش و برش ویدیو...", chat_id, chat_data['msg_id'])
                 
-                # ایجاد یک نام پاکسازی شده برای جلوگیری از تداخل
                 base_name, extension = os.path.splitext(chat_data['current_filename'])
                 if not extension: extension = ".mp4"
-                clean_name = "".join([c for c in base_name if c.isalnum()]).strip()
                 
-                # استفاده از یک ساب-فولدر موقت برای پارت‌ها
-                temp_parts_dir = os.path.join(DOWNLOAD_DIR, f"parts_{chat_id}")
+                # ایجاد پوشه موقت اختصاصی
+                temp_parts_dir = os.path.join(DOWNLOAD_DIR, f"parts_{chat_id}_{int(time.time())}")
                 if not os.path.exists(temp_parts_dir): os.makedirs(temp_parts_dir)
 
                 import subprocess
                 try:
-                    # دستور FFmpeg برای برش دقیق
+                    # دستور اصلاح شده: استفاده از قابلیت کپی استریم برای سرعت و دقت بالا
                     output_template = os.path.join(temp_parts_dir, f"Part_%03d{extension}")
+                    
                     command = [
                         'ffmpeg', '-y', '-i', file_path,
-                        '-c', 'copy', '-map', '0',
+                        '-c', 'copy',
+                        '-map', '0',
                         '-f', 'segment',
-                        '-segment_size', '46M', 
+                        '-segment_size', '46M',
                         '-reset_timestamps', '1',
+                        '-break_non_keyframes', '1', # جلوگیری از خراب شدن فریم‌ها
                         output_template
                     ]
                     
-                    # اجرای دستور و انتظار برای اتمام کامل (check=True)
-                    subprocess.run(command, check=True, capture_output=True)
+                    # اجرای دستور و ضبط دقیق خروجی برای عیب‌یابی
+                    process = subprocess.run(command, capture_output=True, text=True)
                     
-                    # لیست کردن تمام پارت‌های ساخته شده
+                    if process.returncode != 0:
+                        logging.error(f"FFmpeg Error Detail: {process.stderr}")
+                        raise Exception("FFmpeg failed")
+
+                    # پیدا کردن پارت‌های ساخته شده
                     generated_parts = sorted([f for f in os.listdir(temp_parts_dir) if f.startswith("Part_")])
                     
                     if not generated_parts:
-                        raise Exception("هیچ پارتی ساخته نشد.")
+                        raise Exception("No parts were created by FFmpeg")
 
-                    # ارسال تک‌تک پارت‌ها
+                    total_parts = len(generated_parts)
+                    await context.bot.edit_message_text(f"✅ {total_parts} پارت آماده شد. در حال ارسال...", chat_id, chat_data['msg_id'])
+
+                    # ارسال پارت‌ها به ترتیب
                     for i, p_file in enumerate(generated_parts, 1):
                         p_path = os.path.join(temp_parts_dir, p_file)
                         if chat_data.get('status') == 'cancelled': break
                         
+                        # نام فایل خروجی برای کاربر
+                        display_name = f"Part_{i}_{chat_data['current_filename']}"
+                        
                         with open(p_path, 'rb') as tp:
-                            caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {i} از {len(generated_parts)}"
+                            caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {i} از {total_parts}"
                             
-                            # تشخیص نوع ارسال (ویدیو یا فایل)
                             if extension.lower() in VIDEO_EXTS:
                                 await context.bot.send_video(
                                     chat_id, video=tp, caption=caption,
+                                    filename=display_name, # نام‌گذاری پارت در تلگرام
                                     supports_streaming=True, parse_mode='Markdown',
-                                    read_timeout=120, write_timeout=120
+                                    read_timeout=300, write_timeout=300
                                 )
                             else:
                                 await context.bot.send_document(
                                     chat_id, document=tp, caption=caption,
-                                    parse_mode='Markdown', read_timeout=120, write_timeout=120
+                                    filename=display_name,
+                                    parse_mode='Markdown', read_timeout=300, write_timeout=300
                                 )
                         
-                        os.remove(p_path) # حذف پارت بعد از ارسال
-                        await asyncio.sleep(2) # وقفه برای جلوگیری از محدودیت تلگرام
+                        os.remove(p_path)
+                        await asyncio.sleep(2) # جلوگیری از محدودیت Flood تلگرام
                     
-                    # پاکسازی پوشه موقت
-                    os.rmdir(temp_parts_dir)
-
                 except Exception as e:
-                    logging.error(f"Split Error: {e}")
-                    await context.bot.send_message(chat_id, "❌ خطا در برش یا ارسال پارت‌ها.")
+                    logging.error(f"Critical Split Error: {e}")
+                    await context.bot.send_message(chat_id, f"❌ خطا در عملیات: پارت‌بندی فایل مقدور نبود.\nدلیل احتمالی: فرمت ناسازگار ویدیو.")
+                
+                finally:
+                    # پاکسازی نهایی پوشه موقت
+                    if os.path.exists(temp_parts_dir):
+                        import shutil
+                        shutil.rmtree(temp_parts_dir)
             # --- پایان بخش هوشمند ---
 
             # --- شروع بخش ارسال تک فایل ---
@@ -385,4 +400,3 @@ if __name__ == '__main__':
     app.add_handler(CallbackQueryHandler(callback_gate))
     print("🤖 Bot Started...")
     app.run_polling()
-    
