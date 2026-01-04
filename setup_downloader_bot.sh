@@ -2,104 +2,78 @@
 INSTALL_DIR="/opt/telegram_downloader_bot"
 SERVICE_NAME="telegramdownloaderbot"
 GITHUB_REPO="https://github.com/0fariid0/TelegramFileDownloaderBot.git"
+CONFIG_FILE="$INSTALL_DIR/bot_config.py"
+
+# تابع کمکی برای خواندن مقادیر فعلی
+get_cfg() {
+    local key=$1
+    if [ -f "$CONFIG_FILE" ]; then
+        grep "$key =" "$CONFIG_FILE" | sed "s/.*= //" | tr -d '"'
+    else
+        echo "Not Set"
+    fi
+}
 
 show_menu() {
   clear
   echo "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
-  echo "┃ ⚙️ Telegram File Downloader Bot Setup ┃"
+  echo "┃ ⚙️ Telegram Bot Manager (Advanced)   ┃"
   echo "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
-  echo ""
-  echo "1) 🛠 Install or Reinstall the bot"
-  echo "2) ⚙️ Configure the bot (Change Token)"
-  echo "3) 🔄 Update the bot"
-  echo "4) ❌ Uninstall the bot"
+  echo "1) 🛠 Install/Reinstall Bot"
+  echo "2) ⚙️ Configure (Token & Admin ID)"
+  echo "3) 🔄 Update Source Code"
+  echo "4) 📜 View Live Logs"
+  echo "5) 🛰 Service Status & Restart"
+  echo "6) ❌ Uninstall Bot"
   echo "0) 🚪 Exit"
   echo ""
-  read -p "Your choice: " choice
-}
-
-install_bot() {
-  echo "📦 Installing the bot..."
-  if [ -d "$INSTALL_DIR" ]; then
-    echo "Existing installation found. Performing a clean re-installation."
-    systemctl stop "$SERVICE_NAME" &>/dev/null
-    rm -rf "$INSTALL_DIR"
-  fi
-
-  echo "Cloning the repository from $GITHUB_REPO to $INSTALL_DIR..."
-  git clone "$GITHUB_REPO" "$INSTALL_DIR" || { echo "❌ Failed to clone repository."; exit 1; }
-  
-  cd "$INSTALL_DIR" || exit
-  bash install_downloader_bot.sh
-  
-  cd - > /dev/null
-  echo "✅ Installation process finished."
-  read -p "⏎ Press Enter to return to the menu..." _
+  read -p "Select an option: " choice
 }
 
 configure_bot() {
-  if [ ! -d "$INSTALL_DIR" ]; then
-    echo "⚠️ Bot is not installed. Please install it first."
-  else
-    cd "$INSTALL_DIR" || exit
-    read -p "Enter your new Telegram Bot Token: " new_bot_token
-    echo "TOKEN = \"$new_bot_token\"" > bot_config.py
-    echo "🔄 Restarting the bot service..."
-    systemctl restart "$SERVICE_NAME"
-    echo "✅ Bot token updated and service restarted."
+    if [ ! -d "$INSTALL_DIR" ]; then
+        echo "⚠️ Bot not installed!"
+    else
+        curr_token=$(get_cfg "TOKEN")
+        curr_admin=$(get_cfg "ADMIN_ID")
+        echo "--- Current Settings ---"
+        echo "Token: $curr_token"
+        echo "Admin: $curr_admin"
+        echo "-----------------------"
+        read -p "New Token (Enter to skip): " n_token
+        read -p "New Admin ID (Enter to skip): " n_admin
+        
+        # اگر کاربر اینتر زد، همان مقدار قبلی بماند
+        [ -z "$n_token" ] && n_token=$curr_token
+        [ -z "$n_admin" ] && n_admin=$curr_admin
+
+        cat > "$CONFIG_FILE" <<EOF
+TOKEN = "$n_token"
+ADMIN_ID = $n_admin
+EOF
+        systemctl restart "$SERVICE_NAME"
+        echo "✅ Settings updated and Bot restarted."
+    fi
+    read -p "⏎ Press Enter..." _
+}
+
+install_bot() {
+    echo "📦 Installing..."
+    [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR"
+    git clone "$GITHUB_REPO" "$INSTALL_DIR"
+    cd "$INSTALL_DIR" && bash install_downloader_bot.sh
     cd - > /dev/null
-  fi
-  read -p "⏎ Press Enter to return to the menu..." _
+    read -p "⏎ Press Enter..." _
 }
 
 update_bot() {
-  if [ ! -d "$INSTALL_DIR/.git" ]; then
-    echo "⚠️ Git repository not found. Please install the bot first."
-  else
-    echo "🔄 Updating the bot to the latest version..."
-    cd "$INSTALL_DIR" || exit
-    
-    echo "Stashing local changes (like bot_config.py)..."
-    git stash
-    
-    echo "Pulling latest changes from GitHub..."
-    if git pull origin main; then
-        echo "Re-applying local changes..."
-        git stash pop 2>/dev/null || echo "No local changes to re-apply."
-        
-        echo "Re-installing dependencies to ensure compatibility..."
-        source venv/bin/activate
-        pip install --upgrade pip wheel > /dev/null
-        pip install -r requirements.txt > /dev/null
-        deactivate
-        
-        echo "🔄 Restarting the bot service..."
-        systemctl restart "$SERVICE_NAME"
-        echo "✅ Bot updated and restarted successfully."
-    else
-        echo "❌ Failed to update repository. Rolling back changes..."
-        git stash pop 2>/dev/null
-        echo "Update failed. Your local files are safe."
-    fi
+    echo "🔄 Updating..."
+    cd "$INSTALL_DIR" && git stash && git pull origin main && git stash pop
+    source venv/bin/activate && pip install -r requirements.txt && deactivate
+    systemctl restart "$SERVICE_NAME"
+    echo "✅ Updated."
     cd - > /dev/null
-  fi
-  read -p "⏎ Press Enter to return to the menu..." _
-}
-
-uninstall_bot() {
-  read -p "Are you sure you want to uninstall the bot completely? (y/n): " confirm
-  if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-    echo "❌ Uninstalling the bot completely..."
-    systemctl stop "$SERVICE_NAME" &>/dev/null
-    systemctl disable "$SERVICE_NAME" &>/dev/null
-    rm -f "/etc/systemd/system/$SERVICE_NAME.service"
-    systemctl daemon-reload
-    rm -rf "$INSTALL_DIR"
-    echo "✅ Bot and all its files have been removed."
-  else
-    echo "Uninstall cancelled."
-  fi
-  read -p "⏎ Press Enter to return to the menu..." _
+    read -p "⏎ Press Enter..." _
 }
 
 while true; do
@@ -108,8 +82,21 @@ while true; do
     1) install_bot ;;
     2) configure_bot ;;
     3) update_bot ;;
-    4) uninstall_bot ;;
-    0) echo "👋 Exiting. Goodbye!"; exit 0 ;;
-    *) echo "❌ Invalid option. Please choose a valid one."; sleep 2 ;;
+    4) journalctl -u "$SERVICE_NAME" -f ;;
+    5) 
+       systemctl status "$SERVICE_NAME"
+       read -p "Do you want to restart? (y/n): " res
+       [[ "$res" == "y" ]] && systemctl restart "$SERVICE_NAME" && echo "Restarted."
+       read -p "⏎ Press Enter..." _
+       ;;
+    6) 
+       systemctl stop "$SERVICE_NAME" && systemctl disable "$SERVICE_NAME"
+       rm -rf "$INSTALL_DIR" "/etc/systemd/system/$SERVICE_NAME.service"
+       systemctl daemon-reload
+       echo "✅ Uninstalled."
+       sleep 2
+       ;;
+    0) exit 0 ;;
+    *) echo "Invalid option"; sleep 1 ;;
   esac
 done
