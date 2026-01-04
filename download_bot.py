@@ -12,36 +12,54 @@ from telegram.ext import (
 )
 from bot_config import TOKEN
 
-# --- تنظیمات ---
-logging.basicConfig(level=logging.INFO)
+# --- تنظیمات اولیه ---
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CHUNK_SIZE = 48 * 1024 * 1024  # 48MB برای هر پارت
+CHUNK_SIZE = 48 * 1024 * 1024  # پارت‌های 48 مگابایتی برای آپلود تلگرام
 DOWNLOAD_DIR = "downloads"
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
-# --- توابع کمکی ---
+# --- توابع کمکی برای زیبایی و محاسبات ---
+
+def human_readable_size(size, decimal_places=2):
+    """تبدیل بایت به حجم قابل خواندن (MB, GB)"""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size < 1024.0:
+            break
+        size /= 1024.0
+    return f"{size:.{decimal_places}f} {unit}"
+
+def get_progress_bar(percent):
+    """ساخت نوار پیشرفت بصری"""
+    done = int(percent / 10)
+    remain = 10 - done
+    return "🔹" * done + "🔸" * remain
 
 def get_keyboard(status="downloading"):
-    """ایجاد دکمه‌های کنترلی براساس وضعیت."""
+    """دکمه‌های کنترلی"""
     if status == "downloading":
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("توقف موقت ⏸", callback_data="pause"),
-             InlineKeyboardButton("لغو کامل ❌", callback_data="cancel")]
+            [InlineKeyboardButton("⏸ توقف", callback_data="pause"),
+             InlineKeyboardButton("❌ لغو", callback_data="cancel")]
         ])
-    else:
+    elif status == "paused":
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("ادامه دانلود ▶️", callback_data="resume"),
-             InlineKeyboardButton("لغو کامل ❌", callback_data="cancel")]
+            [InlineKeyboardButton("▶️ ادامه", callback_data="resume"),
+             InlineKeyboardButton("❌ لغو", callback_data="cancel")]
         ])
+    return None
 
-def split_file(file_path, chunk_size):
+# --- منطق پارت‌بندی فایل ---
+
+def split_file(file_path):
     file_list = []
+    file_size = os.path.getsize(file_path)
     part_num = 1
     with open(file_path, 'rb') as f:
         while True:
-            chunk = f.read(chunk_size)
+            chunk = f.read(CHUNK_SIZE)
             if not chunk: break
             part_name = f"{file_path}.part{part_num}"
             with open(part_name, 'wb') as p: p.write(chunk)
@@ -49,62 +67,69 @@ def split_file(file_path, chunk_size):
             part_num += 1
     return file_list
 
-# --- هسته اصلی دانلود ---
+# --- هسته اصلی دانلود با نمایش سرعت و ETA ---
 
 async def download_task(chat_id, context, url, filename):
     chat_data = context.chat_data
     file_path = os.path.join(DOWNLOAD_DIR, filename)
     
-    # تعیین نقطه شروع (برای Resume)
+    # شروع از جایی که مانده بود (Resume)
     downloaded_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
-    headers = {"User-Agent": "Mozilla/5.0", "Range": f"bytes={downloaded_size}-"}
+    headers = {"Range": f"bytes={downloaded_size}-"}
+    
+    start_time = time.time()
+    last_update_time = time.time()
 
     try:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             async with client.stream("GET", url, headers=headers) as response:
-                if response.status_code == 416: # محدوده نادرست (احتمالا دانلود تمام شده)
+                if response.status_code == 416: # قبلا کامل دانلود شده
                     total_size = downloaded_size
                 elif response.status_code in (200, 206):
                     total_size = int(response.headers.get("Content-Length", 0)) + downloaded_size
-                    
                     mode = "ab" if downloaded_size > 0 else "wb"
+                    
                     with open(file_path, mode) as f:
-                        last_update = 0
-                        async for chunk in response.iter_bytes(chunk_size=16384):
-                            if chat_data.get('status') == 'paused':
-                                return "paused"
-                            if chat_data.get('status') == 'cancelled':
-                                return "cancelled"
+                        async for chunk in response.iter_bytes(chunk_size=32768):
+                            if chat_data.get('status') == 'paused': return "paused"
+                            if chat_data.get('status') == 'cancelled': return "cancelled"
                             
                             f.write(chunk)
                             downloaded_size += len(chunk)
                             
-                            # بروزرسانی نوار پیشرفت هر 3 ثانیه (برای جلوگیری از Flood تلگرام)
-                            if time.time() - last_update > 3:
-                                await update_progress(chat_id, context, filename, downloaded_size, total_size)
-                                last_update = time.time()
+                            # آپدیت وضعیت هر 2 ثانیه
+                            now = time.time()
+                            if now - last_update_time > 2.0:
+                                diff = now - start_time
+                                speed = (downloaded_size - (os.path.getsize(file_path) if mode=="ab" else 0)) / diff if diff > 0 else 0
+                                percent = (downloaded_size / total_size) * 100 if total_size > 0 else 0
+                                eta = (total_size - downloaded_size) / speed if speed > 0 else 0
+                                
+                                await update_ui(chat_id, context, filename, downloaded_size, total_size, percent, speed, eta)
+                                last_update_time = now
                 else:
                     return f"خطای سرور: {response.status_code}"
-
         return "completed"
-
     except Exception as e:
-        logger.error(f"Download error: {e}")
         return str(e)
 
-async def update_progress(chat_id, context, filename, downloaded, total):
-    percent = (downloaded / total * 100) if total > 0 else 0
-    bar = "█" * int(percent / 10) + "░" * (10 - int(percent / 10))
-    text = f"📥 **در حال دانلود...**\n`{filename}`\n\n`{bar}` {percent:.1f}%\n📦 {downloaded//1048576} / {total//1048576} MB"
-    
+async def update_ui(chat_id, context, filename, downloaded, total, percent, speed, eta):
+    bar = get_progress_bar(percent)
+    text = (
+        f"🚀 **در حال دانلود با سرعت بالا...**\n\n"
+        f"📦 **فایل:** `{filename}`\n"
+        f"📊 **پیشرفت:** `{percent:.1f}%`\n"
+        f"{bar}\n\n"
+        f"⚡ **سرعت:** `{human_readable_size(speed)}/s`\n"
+        f"📥 **حجم:** `{human_readable_size(downloaded)} / {human_readable_size(total)}`\n"
+        f"⏱ **زمان باقی‌مانده:** `{int(eta)} ثانیه`"
+    )
     try:
-        await context.bot.edit_message_text(
-            text, chat_id, context.chat_data['msg_id'], 
-            reply_markup=get_keyboard("downloading"), parse_mode='Markdown'
-        )
+        await context.bot.edit_message_text(text, chat_id, context.chat_data['msg_id'], 
+                                            reply_markup=get_keyboard("downloading"), parse_mode='Markdown')
     except: pass
 
-# --- هندلرهای دستورات ---
+# --- مدیریت صف و آپلود ---
 
 async def handle_new_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
@@ -113,26 +138,25 @@ async def handle_new_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'queue' not in context.chat_data: context.chat_data['queue'] = deque()
     context.chat_data['queue'].append(url)
     
-    await update.message.reply_text(f"✅ لینک به صف اضافه شد. تعداد در صف: {len(context.chat_data['queue'])}")
+    await update.message.reply_text(f"✅ به صف اضافه شد. (موقعیت: {len(context.chat_data['queue'])})")
     
     if not context.chat_data.get('is_working'):
         await start_next_download(update.effective_chat.id, context)
 
 async def start_next_download(chat_id, context):
-    if not context.chat_data['queue']:
+    if not context.chat_data.get('queue'):
         context.chat_data['is_working'] = False
         return
 
     context.chat_data['is_working'] = True
     url = context.chat_data['queue'].popleft()
-    context.chat_data['status'] = 'downloading'
     context.chat_data['current_url'] = url
+    context.chat_data['status'] = 'downloading'
     
-    # حدس نام فایل
-    filename = urllib.parse.unquote(url.split('/')[-1].split('?')[0]) or "file"
+    filename = urllib.parse.unquote(url.split('/')[-1].split('?')[0]) or "file_download"
     context.chat_data['current_filename'] = filename
     
-    msg = await context.bot.send_message(chat_id, f"⏳ شروع دانلود: {filename}", reply_markup=get_keyboard())
+    msg = await context.bot.send_message(chat_id, "🔍 در حال اتصال به لینک...", parse_mode='Markdown')
     context.chat_data['msg_id'] = msg.message_id
 
     result = await download_task(chat_id, context, url, filename)
@@ -143,29 +167,33 @@ async def process_result(chat_id, context, result):
     file_path = os.path.join(DOWNLOAD_DIR, filename)
 
     if result == "completed":
-        await context.bot.edit_message_text("✅ دانلود تمام شد. در حال بررسی برای آپلود...", chat_id, context.chat_data['msg_id'])
+        await context.bot.edit_message_text("✅ دانلود ۱۰۰٪ تمام شد. در حال ارسال به تلگرام... 📤", chat_id, context.chat_data['msg_id'])
         
-        if os.path.getsize(file_path) > CHUNK_SIZE:
-            parts = split_file(file_path, CHUNK_SIZE)
+        file_size = os.path.getsize(file_path)
+        if file_size > CHUNK_SIZE:
+            parts = split_file(file_path)
             for i, p in enumerate(parts):
-                await context.bot.send_document(chat_id, document=open(p, 'rb'), caption=f"Part {i+1}")
+                await context.bot.send_document(chat_id, document=open(p, 'rb'), caption=f"Part {i+1} of {len(parts)}")
                 os.remove(p)
         else:
-            await context.bot.send_document(chat_id, document=open(file_path, 'rb'))
+            await context.bot.send_document(chat_id, document=open(file_path, 'rb'), caption=f"✅ {filename}")
         
         if os.path.exists(file_path): os.remove(file_path)
+        await context.bot.delete_message(chat_id, context.chat_data['msg_id'])
         await start_next_download(chat_id, context)
 
     elif result == "paused":
-        await context.bot.edit_message_text(f"⏸ دانلود متوقف شد: `{filename}`", chat_id, context.chat_data['msg_id'], 
+        await context.bot.edit_message_text(f"⏸ **دانلود متوقف شد.**\nفایل: `{filename}`", chat_id, context.chat_data['msg_id'], 
                                             reply_markup=get_keyboard("paused"), parse_mode='Markdown')
-    
     elif result == "cancelled":
         if os.path.exists(file_path): os.remove(file_path)
-        await context.bot.edit_message_text("❌ عملیات لغو شد.", chat_id, context.chat_data['msg_id'])
+        await context.bot.edit_message_text("❌ عملیات لغو شد و فایل حذف گردید.", chat_id, context.chat_data['msg_id'])
+        await start_next_download(chat_id, context)
+    else:
+        await context.bot.send_message(chat_id, f"❌ خطا: {result}")
         await start_next_download(chat_id, context)
 
-# --- کال‌بک دکمه‌ها ---
+# --- مدیریت دکمه‌ها ---
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -174,25 +202,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "pause":
         context.chat_data['status'] = 'paused'
-        await query.answer("توقف موقت...")
-    
+        await query.answer("متوقف شد.")
     elif data == "resume":
         context.chat_data['status'] = 'downloading'
         await query.answer("ادامه دانلود...")
-        # اجرای مجدد تسک دانلود
         asyncio.create_task(process_result(chat_id, context, 
             await download_task(chat_id, context, context.chat_data['current_url'], context.chat_data['current_filename'])))
-    
     elif data == "cancel":
         context.chat_data['status'] = 'cancelled'
-        await query.answer("لغو دانلود...")
+        await query.answer("لغو شد.")
 
-# --- اجرای ربات ---
+# --- دستور شروع ---
+
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 سلام! من ربات دانلودر پیشرفته هستم.\n\n"
+        "✨ ویژگی‌ها:\n"
+        "🔹 سرعت بالا\n"
+        "🔹 پارت‌بندی خودکار\n"
+        "🔹 قابلیت توقف و ادامه\n\n"
+        "لینک مستقیم خود را ارسال کنید تا شروع کنیم! 👇"
+    )
 
 def main():
     app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_link))
     app.add_handler(CallbackQueryHandler(button_handler))
+    print("ربات روشن شد...")
     app.run_polling()
 
 if __name__ == '__main__':
