@@ -205,28 +205,24 @@ async def finalize_dl(chat_id, context, res):
             is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
             file_size = os.path.getsize(file_path)
 
-            # --- شروع بخش هوشمند با FFmpeg ---
+            # --- شروع بخش هوشمند بر اساس حجم پارت‌ها ---
             if file_size > CHUNK_SIZE:
-                await context.bot.edit_message_text("✂️ در حال بخش‌بندی ویدئو به قطعات استاندارد...", chat_id, chat_data['msg_id'])
+                await context.bot.edit_message_text("✂️ فایل بزرگتر از محدوده مجاز است. در حال برش به پارت‌های ۴۵ مگابایتی...", chat_id, chat_data['msg_id'])
                 
-                # جدا کردن نام و پسوند فایل اصلی
                 base_name, extension = os.path.splitext(chat_data['current_filename'])
-                if not extension: extension = ".mp4" # پیش‌فرض اگر پسوند نداشت
-                
-                # پاکسازی نام برای جلوگیری از تداخل سیستمی
+                if not extension: extension = ".mp4"
                 clean_name = "".join([c for c in base_name if c.isalnum() or c in ('_', '-')]).strip()
-                
-                # الگوی خروجی: Part_001_filename.mp4
                 output_pattern = os.path.join(DOWNLOAD_DIR, f"Part_%03d_{clean_name}{extension}")
                 
                 import subprocess
                 try:
-                    # دستور بهینه برای برش ویدیویی سالم
+                    # استفاده از دستور fs (file size) برای محدود کردن حجم هر پارت
+                    # ما روی 45MB تنظیم می‌کنیم که حاشیه امنیت برای تلگرام داشته باشد
                     command = [
                         'ffmpeg', '-y', '-i', file_path,
                         '-c', 'copy', '-map', '0',
-                        '-segment_time', '00:10:00', # برش هر 10 دقیقه
                         '-f', 'segment',
+                        '-segment_size', '45M',  # محدودیت حجم هر پارت
                         '-reset_timestamps', '1',
                         output_pattern
                     ]
@@ -236,28 +232,32 @@ async def finalize_dl(chat_id, context, res):
                     if result.returncode != 0:
                         raise Exception(f"FFmpeg Error: {result.stderr}")
 
-                    # لیست کردن پارت‌ها بر اساس الگوی ساخته شده
                     parts = sorted([f for f in os.listdir(DOWNLOAD_DIR) if f.startswith("Part_") and clean_name in f])
 
                     for i, p_file in enumerate(parts, 1):
                         p_path = os.path.join(DOWNLOAD_DIR, p_file)
                         if chat_data.get('status') == 'cancelled': break
                         
+                        # چک کردن نهایی حجم (اگر باز هم بزرگتر بود از این پارت بگذرد تا ربات کرش نکند)
+                        if os.path.getsize(p_path) > 49 * 1024 * 1024:
+                             await context.bot.send_message(chat_id, f"⚠️ پارت {i} به دلیل حجم بالا (بیش از 50MB) حذف شد.")
+                             os.remove(p_path)
+                             continue
+
                         with open(p_path, 'rb') as tp:
                             caption = f"🎬 **پارت {i}**\n📄 `{chat_data['current_filename']}`"
                             await context.bot.send_video(
                                 chat_id, video=tp, caption=caption,
                                 supports_streaming=True, parse_mode='Markdown',
-                                read_timeout=150, write_timeout=150
+                                read_timeout=180, write_timeout=180
                             )
                         
                         if os.path.exists(p_path): os.remove(p_path)
-                        await asyncio.sleep(2) # وقفه برای جلوگیری از Flood تلگرام
+                        await asyncio.sleep(2)
                         
                 except Exception as e:
                     logging.error(f"Split Error: {e}")
                     await context.bot.send_message(chat_id, f"❌ خطا در عملیات برش: {str(e)[:100]}")
-            # --- پایان بخش هوشمند ---
 
             # --- شروع بخش ارسال تک فایل ---
             else:
