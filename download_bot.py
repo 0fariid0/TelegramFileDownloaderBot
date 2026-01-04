@@ -138,7 +138,21 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- پردازش پیام و صف ---
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
+    # بررسی اینکه آیا ادمین در حال تغییر تنظیمات است
+    if user_id == ADMIN_ID and context.user_data.get('waiting_for_limit'):
+        if update.message.text.isdigit():
+            new_limit = int(update.message.text)
+            db["settings"]["daily_limit"] = new_limit
+            save_db(db)
+            context.user_data['waiting_for_limit'] = False
+            return await update.message.reply_text(f"✅ محدودیت دانلود روزانه به {new_limit} تغییر یافت.")
+        else:
+            return await update.message.reply_text("❌ لطفاً فقط یک عدد انگلیسی ارسال کنید.")
+
+    # بقیه کد قبلی شما از اینجا شروع شود (بررسی banned بودن و لینک ها)
     u_data = check_user(user_id)
+    # ... ادامه کد handle_msg
     
     if u_data["status"] == "banned":
         return await update.message.reply_text("🚫 دسترسی شما به ربات مسدود شده است.")
@@ -255,12 +269,17 @@ async def callback_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
             
         elif data == "adm_users":
-            # نمایش لیست کاربران
-            msg = "👥 **لیست کاربران:**\n"
-            for uid, info in list(db['users'].items())[:10]: # نمایش 10 نفر اول برای جلوگیری از طولانی شدن
-                msg += f"\n👤 `{uid}`: {info['downloads_today']} دانلود"
-            kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]]
+            msg = f"👥 **مدیریت کاربران**\n\nمحدودیت فعلی سیستم: {db['settings']['daily_limit']} فایل در روز"
+            kb = [
+                [InlineKeyboardButton("🔢 تغییر محدودیت عمومی", callback_data="adm_set_limit")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]
+            ]
             await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+        elif data == "adm_set_limit":
+            context.user_data['waiting_for_limit'] = True
+            await query.edit_message_text("لطفاً عدد جدید محدودیت دانلود روزانه را ارسال کنید:", 
+                                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ انصراف", callback_data="adm_users")]]))
 
         elif data == "adm_logs":
             # بررسی وجود فایل لاگ
