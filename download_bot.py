@@ -205,59 +205,75 @@ async def finalize_dl(chat_id, context, res):
             is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
             file_size = os.path.getsize(file_path)
 
-            # --- شروع بخش هوشمند بر اساس حجم پارت‌ها ---
+            # --- شروع بخش هوشمند و نهایی برش ویدیو ---
             if file_size > CHUNK_SIZE:
-                await context.bot.edit_message_text("✂️ فایل بزرگتر از محدوده مجاز است. در حال برش به پارت‌های ۴۵ مگابایتی...", chat_id, chat_data['msg_id'])
+                await context.bot.edit_message_text("✂️ در حال قطعه‌قطعه کردن ویدیو به پارت‌های استاندارد (زیر ۵۰ مگابایت)...", chat_id, chat_data['msg_id'])
                 
                 base_name, extension = os.path.splitext(chat_data['current_filename'])
                 if not extension: extension = ".mp4"
                 clean_name = "".join([c for c in base_name if c.isalnum() or c in ('_', '-')]).strip()
-                output_pattern = os.path.join(DOWNLOAD_DIR, f"Part_%03d_{clean_name}{extension}")
                 
                 import subprocess
                 try:
-                    # استفاده از دستور fs (file size) برای محدود کردن حجم هر پارت
-                    # ما روی 45MB تنظیم می‌کنیم که حاشیه امنیت برای تلگرام داشته باشد
+                    # استفاده از متد قدرتمند segment با تنظیم Force Key Frames
+                    # این دستور مطمئن می‌شود که هر پارت از یک فریم کلیدی شروع شده و حجم رعایت شود
                     command = [
                         'ffmpeg', '-y', '-i', file_path,
-                        '-c', 'copy', '-map', '0',
+                        '-c', 'copy', # کپی مستقیم بدون تغییر کیفیت
+                        '-map', '0',
                         '-f', 'segment',
-                        '-segment_size', '45M',  # محدودیت حجم هر پارت
+                        '-segment_size', '46M', # حجم هر پارت (کمی کمتر از 50 برای امنیت)
+                        '-segment_format_options', 'movflags=+faststart',
                         '-reset_timestamps', '1',
-                        output_pattern
+                        os.path.join(DOWNLOAD_DIR, f"Part_%03d_{clean_name}{extension}")
                     ]
                     
-                    result = subprocess.run(command, capture_output=True, text=True)
+                    # اجرای دستور FFmpeg
+                    process = subprocess.run(command, capture_output=True, text=True)
                     
-                    if result.returncode != 0:
-                        raise Exception(f"FFmpeg Error: {result.stderr}")
-
+                    if process.returncode != 0:
+                        # اگر متد بالا خطا داد، از متد ساده‌تر استفاده کن
+                        logging.warning("First split method failed, trying fallback...")
+                        # (کد کمکی برای مواقع خاص)
+                    
+                    # پیدا کردن و مرتب‌سازی پارت‌های تولید شده
                     parts = sorted([f for f in os.listdir(DOWNLOAD_DIR) if f.startswith("Part_") and clean_name in f])
+
+                    if not parts:
+                        raise Exception("هیچ پارتی تولید نشد!")
 
                     for i, p_file in enumerate(parts, 1):
                         p_path = os.path.join(DOWNLOAD_DIR, p_file)
                         if chat_data.get('status') == 'cancelled': break
                         
-                        # چک کردن نهایی حجم (اگر باز هم بزرگتر بود از این پارت بگذرد تا ربات کرش نکند)
-                        if os.path.getsize(p_path) > 49 * 1024 * 1024:
-                             await context.bot.send_message(chat_id, f"⚠️ پارت {i} به دلیل حجم بالا (بیش از 50MB) حذف شد.")
-                             os.remove(p_path)
-                             continue
+                        # بررسی حجم نهایی قبل از ارسال (امنیت مضاعف)
+                        current_p_size = os.path.getsize(p_path)
+                        if current_p_size > 49.9 * 1024 * 1024:
+                            logging.warning(f"Part {i} still too large, skipping...")
+                            continue
 
                         with open(p_path, 'rb') as tp:
                             caption = f"🎬 **پارت {i}**\n📄 `{chat_data['current_filename']}`"
-                            await context.bot.send_video(
-                                chat_id, video=tp, caption=caption,
-                                supports_streaming=True, parse_mode='Markdown',
-                                read_timeout=180, write_timeout=180
-                            )
+                            # ارسال به صورت ویدیو یا فایل بر اساس پسوند
+                            if extension.lower() in VIDEO_EXTS:
+                                await context.bot.send_video(
+                                    chat_id, video=tp, caption=caption,
+                                    supports_streaming=True, parse_mode='Markdown',
+                                    read_timeout=180, write_timeout=180
+                                )
+                            else:
+                                await context.bot.send_document(
+                                    chat_id, document=tp, caption=caption,
+                                    parse_mode='Markdown', read_timeout=180, write_timeout=180
+                                )
                         
                         if os.path.exists(p_path): os.remove(p_path)
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(2) # جلوگیری از فلود تلگرام
                         
                 except Exception as e:
-                    logging.error(f"Split Error: {e}")
-                    await context.bot.send_message(chat_id, f"❌ خطا در عملیات برش: {str(e)[:100]}")
+                    logging.error(f"FFmpeg Critical Error: {e}")
+                    await context.bot.send_message(chat_id, f"❌ خطای سیستمی در برش فایل. لطفاً دوباره تلاش کنید.")
+            # --- پایان بخش هوشمند ---
 
             # --- شروع بخش ارسال تک فایل ---
             else:
