@@ -115,9 +115,14 @@ async def download_engine(chat_id, context, url, filename):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     check_user(user.id)
-    msg = "🚀 **خوش آمدید!**\n\nلینک مستقیم فایل را بفرستید تا برایتان دانلود و آپلود کنم."
+    
+    # شناسایی خودکار ادمین و نمایش پنل
     if user.id == ADMIN_ID:
-        msg += "\n\n👨‍✈️ ادمین عزیز، برای مدیریت از /admin استفاده کنید."
+        # فراخوانی مستقیم تابع پنل ادمین
+        return await admin_menu(update, context)
+    
+    # پیام برای کاربران معمولی
+    msg = "🚀 **خوش آمدید!**\n\nلینک مستقیم فایل را بفرستید تا برایتان دانلود و آپلود کنم."
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
