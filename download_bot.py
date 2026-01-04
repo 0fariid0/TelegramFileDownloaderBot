@@ -19,7 +19,7 @@ try:
 except ImportError:
     TOKEN = "YOUR_BOT_TOKEN_HERE"
 
-ADMIN_ID = 12345678  # آیدی عددی خود را وارد کنید
+ADMIN_ID = 450281442  # آیدی عددی خود را وارد کنید
 DB_FILE = "users_db.json"
 LOG_FILE = "bot_log.txt"
 HISTORY_FILE = "download_history.txt"
