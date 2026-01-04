@@ -209,53 +209,54 @@ async def finalize_dl(chat_id, context, res):
             if file_size > CHUNK_SIZE:
                 await context.bot.edit_message_text("✂️ در حال بخش‌بندی ویدئو به قطعات استاندارد...", chat_id, chat_data['msg_id'])
                 
-                # پاکسازی نام فایل برای جلوگیری از خطا در محیط لینوکس
-                clean_name = "".join([c for c in chat_data['current_filename'] if c.isalnum() or c in ('.', '_')]).strip()
-                # الگوی نام‌گذاری پارت‌ها: Part_001_filename.mp4
-                output_pattern = os.path.join(DOWNLOAD_DIR, f"Part_%03d_{clean_name}")
+                # جدا کردن نام و پسوند فایل اصلی
+                base_name, extension = os.path.splitext(chat_data['current_filename'])
+                if not extension: extension = ".mp4" # پیش‌فرض اگر پسوند نداشت
+                
+                # پاکسازی نام برای جلوگیری از تداخل سیستمی
+                clean_name = "".join([c for c in base_name if c.isalnum() or c in ('_', '-')]).strip()
+                
+                # الگوی خروجی: Part_001_filename.mp4
+                output_pattern = os.path.join(DOWNLOAD_DIR, f"Part_%03d_{clean_name}{extension}")
                 
                 import subprocess
                 try:
-                    # دستور هوشمند FFmpeg برای برش بر اساس زمان (هر 10 دقیقه یک پارت)
-                    # این کار باعث می‌شود هر پارت هدر مستقل داشته باشد و در تلگرام باز شود
+                    # دستور بهینه برای برش ویدیویی سالم
                     command = [
                         'ffmpeg', '-y', '-i', file_path,
                         '-c', 'copy', '-map', '0',
-                        '-segment_time', '00:10:00', 
+                        '-segment_time', '00:10:00', # برش هر 10 دقیقه
                         '-f', 'segment',
                         '-reset_timestamps', '1',
                         output_pattern
                     ]
                     
-                    # اجرای دستور و بررسی خروجی
                     result = subprocess.run(command, capture_output=True, text=True)
                     
                     if result.returncode != 0:
                         raise Exception(f"FFmpeg Error: {result.stderr}")
 
-                    # پیدا کردن پارت‌های تولید شده و مرتب کردن آن‌ها
-                    all_files = os.listdir(DOWNLOAD_DIR)
-                    parts = sorted([f for f in all_files if f.startswith("Part_") and clean_name in f])
+                    # لیست کردن پارت‌ها بر اساس الگوی ساخته شده
+                    parts = sorted([f for f in os.listdir(DOWNLOAD_DIR) if f.startswith("Part_") and clean_name in f])
 
                     for i, p_file in enumerate(parts, 1):
                         p_path = os.path.join(DOWNLOAD_DIR, p_file)
                         if chat_data.get('status') == 'cancelled': break
                         
-                        # ارسال هر پارت به عنوان یک ویدیوی مستقل
                         with open(p_path, 'rb') as tp:
-                            caption = f"🎬 پارت {i} از فایل:\n📄 `{chat_data['current_filename']}`"
+                            caption = f"🎬 **پارت {i}**\n📄 `{chat_data['current_filename']}`"
                             await context.bot.send_video(
                                 chat_id, video=tp, caption=caption,
-                                supports_streaming=True, 
-                                read_timeout=120, write_timeout=120
+                                supports_streaming=True, parse_mode='Markdown',
+                                read_timeout=150, write_timeout=150
                             )
                         
-                        os.remove(p_path) # حذف پارت بعد از ارسال برای خالی شدن فضا
-                        await asyncio.sleep(1.5) # وقفه کوتاه برای جلوگیری از بلاک شدن توسط تلگرام
+                        if os.path.exists(p_path): os.remove(p_path)
+                        await asyncio.sleep(2) # وقفه برای جلوگیری از Flood تلگرام
                         
                 except Exception as e:
                     logging.error(f"Split Error: {e}")
-                    await context.bot.send_message(chat_id, f"❌ خطا در برش: {str(e)[:100]}")
+                    await context.bot.send_message(chat_id, f"❌ خطا در عملیات برش: {str(e)[:100]}")
             # --- پایان بخش هوشمند ---
 
             # --- شروع بخش ارسال تک فایل ---
