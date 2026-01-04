@@ -222,6 +222,7 @@ async def callback_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     chat_id = update.effective_chat.id
 
+    # مدیریت دانلودها
     if data == "dl_pause":
         context.chat_data['status'] = 'paused'
         await query.answer("متوقف شد")
@@ -235,6 +236,39 @@ async def callback_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(file_path): os.remove(file_path)
         await query.edit_message_text("❌ دانلود لغو شد.")
         await run_next(chat_id, context)
+    
+    # --- بخش اصلاح شده ادمین ---
+    elif data.startswith("adm_") and update.effective_user.id == ADMIN_ID:
+        if data == "adm_main":
+            await admin_menu(update, context)
+            
+        elif data == "adm_clear":
+            files = os.listdir(DOWNLOAD_DIR)
+            for f in files: os.remove(os.path.join(DOWNLOAD_DIR, f))
+            await query.answer(f"🧹 {len(files)} فایل پاکسازی شد")
+            
+        elif data == "adm_history":
+            # نمایش آمار دانلودها
+            total_dl = sum(u['downloads_today'] for u in db['users'].values())
+            msg = f"📈 **آمار سیستم:**\n\nکل دانلودهای امروز: {total_dl}"
+            kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]]
+            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+            
+        elif data == "adm_users":
+            # نمایش لیست کاربران
+            msg = "👥 **لیست کاربران:**\n"
+            for uid, info in list(db['users'].items())[:10]: # نمایش 10 نفر اول برای جلوگیری از طولانی شدن
+                msg += f"\n👤 `{uid}`: {info['downloads_today']} دانلود"
+            kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]]
+            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+        elif data == "adm_logs":
+            # بررسی وجود فایل لاگ
+            if os.path.exists(LOG_FILE):
+                with open(LOG_FILE, "rb") as f:
+                    await context.bot.send_document(chat_id, document=f, caption="📜 فایل لاگ سیستم")
+            else:
+                await query.answer("❌ فایلی یافت نشد", show_alert=True)
     
     # بخش ادمین
     elif data.startswith("adm_") and update.effective_user.id == ADMIN_ID:
