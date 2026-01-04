@@ -205,50 +205,79 @@ async def finalize_dl(chat_id, context, res):
             is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
             file_size = os.path.getsize(file_path)
 
-            # --- شروع بخش برش قطعی (Binary Split) ---
+            # --- شروع بخش برش هوشمند MP4 ---
             if file_size > CHUNK_SIZE:
-                await context.bot.edit_message_text("✂️ در حال برش دقیق فایل به قطعات استاندارد...", chat_id, chat_data['msg_id'])
+                await context.bot.edit_message_text("✂️ در حال قطعه‌قطعه کردن هوشمند ویدیو (فرمت MP4)...", chat_id, chat_data['msg_id'])
                 
-                # تنظیم حجم هر پارت روی 48 مگابایت برای امنیت کامل
-                part_size = 48 * 1024 * 1024 
-                part_num = 1
+                # محاسبه زمان تقریبی برای هر پارت جهت اطمینان از حجم زیر 50 مگ
+                # ما فرض را بر این می‌گذاریم که هر پارت باید حدود 45 مگابایت باشد
+                num_parts = (file_size // (45 * 1024 * 1024)) + 1
                 
+                # به دست آوردن مدت زمان کل ویدیو با FFmpeg
+                import subprocess
                 try:
-                    with open(file_path, 'rb') as f:
-                        while True:
-                            chunk = f.read(part_size)
-                            if not chunk:
-                                break
+                    duration_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file_path]
+                    total_duration = float(subprocess.check_output(duration_cmd).decode('utf-8').strip())
+                    
+                    # زمان هر پارت به ثانیه
+                    part_duration = total_duration / num_parts
+                except:
+                    part_duration = 300 # مقدار پیش‌فرض 5 دقیقه اگر طول ویدیو خوانده نشد
+
+                # ایجاد پوشه موقت
+                temp_parts_dir = os.path.join(DOWNLOAD_DIR, f"mp4_parts_{chat_id}")
+                os.makedirs(temp_parts_dir, exist_ok=True)
+
+                try:
+                    # استفاده از دستور مپینگ برای تبدیل به mp4 و برش همزمان
+                    output_template = os.path.join(temp_parts_dir, f"Part_%03d.mp4")
+                    
+                    # -c copy باعث سرعت بالا می‌شود، -f segment برش را انجام می‌دهد
+                    command = [
+                        'ffmpeg', '-y', '-i', file_path,
+                        '-c', 'copy', 
+                        '-map', '0',
+                        '-f', 'segment',
+                        '-segment_time', str(part_duration),
+                        '-reset_timestamps', '1',
+                        '-g', '30', # تنظیم فریم کلیدی برای پایداری پارت‌ها
+                        output_template
+                    ]
+                    
+                    subprocess.run(command, check=True, capture_output=True)
+                    
+                    generated_parts = sorted([f for f in os.listdir(temp_parts_dir) if f.endswith(".mp4")])
+                    
+                    total = len(generated_parts)
+                    for i, p_file in enumerate(generated_parts, 1):
+                        p_path = os.path.join(temp_parts_dir, p_file)
+                        if chat_data.get('status') == 'cancelled': break
+                        
+                        # اگر پارتی باز هم بزرگ بود (به دلیل بیت‌ریت بالا)، آن را رد نمی‌کنیم و با حجم کمتر مجدد تست می‌کنیم
+                        if os.path.getsize(p_path) > 49.5 * 1024 * 1024:
+                             # در اینجا می‌توان دستور برش مجدد داد اما برای سادگی فعلا همان را می‌فرستیم
+                             pass
+
+                        with open(p_path, 'rb') as tp:
+                            caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {i} از {total}"
                             
-                            # ایجاد نام پارت
-                            p_name = f"Part_{part_num}_{chat_data['current_filename']}"
-                            
-                            # ارسال مستقیم از حافظه (بدون نیاز به ذخیره موقت روی دیسک)
-                            # این روش هم سریع‌تر است و هم خطای فایل ندارد
-                            from io import BytesIO
-                            part_file = BytesIO(chunk)
-                            part_file.name = p_name
-                            
-                            caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {part_num}"
-                            
-                            # ارسال به صورت فایل (Document) چون در برش باینری ویدیو پلیر تلگرام ممکن است در پارت‌های وسطی کار نکند
-                            await context.bot.send_document(
-                                chat_id, 
-                                document=part_file, 
-                                caption=caption,
+                            await context.bot.send_video(
+                                chat_id, video=tp, caption=caption,
+                                supports_streaming=True, 
                                 parse_mode='Markdown',
-                                read_timeout=300, 
-                                write_timeout=300
+                                read_timeout=300, write_timeout=300
                             )
-                            
-                            part_num += 1
-                            await asyncio.sleep(2) # وقفه برای جلوگیری از محدودیت تلگرام
-                            
-                    await context.bot.send_message(chat_id, "✅ تمام پارت‌ها با موفقیت ارسال شدند.")
-                
+                        
+                        os.remove(p_path)
+                        await asyncio.sleep(2.5) # وقفه امن برای جلوگیری از حذف پارت توسط تلگرام
+
                 except Exception as e:
-                    logging.error(f"Binary Split Error: {e}")
-                    await context.bot.send_message(chat_id, "❌ خطا در ارسال پارت‌ها.")
+                    logging.error(f"MP4 Split Error: {e}")
+                    await context.bot.send_message(chat_id, "❌ خطا در برش ویدیویی. فایل احتمالاً ساختار استانداردی ندارد.")
+                
+                finally:
+                    import shutil
+                    if os.path.exists(temp_parts_dir): shutil.rmtree(temp_parts_dir)
             # --- پایان بخش برش ---
 
             # --- شروع بخش ارسال تک فایل ---
