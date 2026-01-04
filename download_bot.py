@@ -73,7 +73,6 @@ async def download_task(chat_id, context, url, filename):
     chat_data = context.chat_data
     file_path = os.path.join(DOWNLOAD_DIR, filename)
     
-    # شروع از جایی که مانده بود (Resume)
     downloaded_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
     headers = {"Range": f"bytes={downloaded_size}-"}
     
@@ -83,25 +82,28 @@ async def download_task(chat_id, context, url, filename):
     try:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             async with client.stream("GET", url, headers=headers) as response:
-                if response.status_code == 416: # قبلا کامل دانلود شده
+                if response.status_code == 416: 
                     total_size = downloaded_size
                 elif response.status_code in (200, 206):
+                    # اگر فایل جدید است، حجم کل را بگیر، اگر ادامه است، حجم باقیمانده + قبلی
                     total_size = int(response.headers.get("Content-Length", 0)) + downloaded_size
                     mode = "ab" if downloaded_size > 0 else "wb"
                     
                     with open(file_path, mode) as f:
-                        async for chunk in response.iter_bytes(chunk_size=32768):
+                        # تغییر اصلی اینجاست: استفاده از aiter_bytes به جای iter_bytes
+                        async for chunk in response.aiter_bytes(chunk_size=32768):
                             if chat_data.get('status') == 'paused': return "paused"
                             if chat_data.get('status') == 'cancelled': return "cancelled"
                             
                             f.write(chunk)
                             downloaded_size += len(chunk)
                             
-                            # آپدیت وضعیت هر 2 ثانیه
                             now = time.time()
                             if now - last_update_time > 2.0:
                                 diff = now - start_time
-                                speed = (downloaded_size - (os.path.getsize(file_path) if mode=="ab" else 0)) / diff if diff > 0 else 0
+                                # محاسبه سرعت از لحظه شروع این نشست
+                                session_downloaded = downloaded_size - (os.path.getsize(file_path) if mode=="ab" else 0)
+                                speed = session_downloaded / diff if diff > 0 else 0
                                 percent = (downloaded_size / total_size) * 100 if total_size > 0 else 0
                                 eta = (total_size - downloaded_size) / speed if speed > 0 else 0
                                 
@@ -111,8 +113,8 @@ async def download_task(chat_id, context, url, filename):
                     return f"خطای سرور: {response.status_code}"
         return "completed"
     except Exception as e:
+        logger.error(f"Download Error: {e}")
         return str(e)
-
 async def update_ui(chat_id, context, filename, downloaded, total, percent, speed, eta):
     bar = get_progress_bar(percent)
     text = (
