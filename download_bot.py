@@ -205,53 +205,57 @@ async def finalize_dl(chat_id, context, res):
             is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
             file_size = os.path.getsize(file_path)
 
-            # --- شروع بخش ارسال پارت‌بندی شده هوشمند ---
+            # --- شروع بخش هوشمند با FFmpeg ---
             if file_size > CHUNK_SIZE:
-                await context.bot.edit_message_text("✂️ فایل بزرگ است، در حال بخش‌بندی ویدئو...", chat_id, chat_data['msg_id'])
+                await context.bot.edit_message_text("✂️ در حال بخش‌بندی ویدئو به قطعات استاندارد...", chat_id, chat_data['msg_id'])
                 
-                # نام فایل خروجی برای بخش‌ها
-                output_pattern = os.path.join(DOWNLOAD_DIR, f"part_%03d_{chat_data['current_filename']}")
+                # پاکسازی نام فایل برای جلوگیری از خطا در محیط لینوکس
+                clean_name = "".join([c for c in chat_data['current_filename'] if c.isalnum() or c in ('.', '_')]).strip()
+                # الگوی نام‌گذاری پارت‌ها: Part_001_filename.mp4
+                output_pattern = os.path.join(DOWNLOAD_DIR, f"Part_%03d_{clean_name}")
                 
-                # دستور FFmpeg برای تکه تکه کردن ویدئو بدون افت کیفیت (Copy Codec)
-                # هر پارت را بر اساس حجم تقریبی یا زمان (مثلاً هر 1000 ثانیه) تقسیم می‌کند
                 import subprocess
-                
                 try:
-                    # تقسیم بر اساس حجم تقریبی (fs) در FFmpeg کمی پیچیده است، 
-                    # بهتر است بر اساس زمان (مثلاً هر 15 دقیقه) تقسیم کنیم که همواره قابل پخش باشد
+                    # دستور هوشمند FFmpeg برای برش بر اساس زمان (هر 10 دقیقه یک پارت)
+                    # این کار باعث می‌شود هر پارت هدر مستقل داشته باشد و در تلگرام باز شود
                     command = [
-                        'ffmpeg', '-i', file_path, 
-                        '-c', 'copy', '-map', '0', 
-                        '-segment_time', '00:15:00', # زمان هر پart (15 دقیقه)
-                        '-f', 'segment', 
+                        'ffmpeg', '-y', '-i', file_path,
+                        '-c', 'copy', '-map', '0',
+                        '-segment_time', '00:10:00', 
+                        '-f', 'segment',
                         '-reset_timestamps', '1',
                         output_pattern
                     ]
-                    subprocess.run(command, check=True)
                     
-                    # لیست کردن پارت‌های تولید شده
-                    parts = sorted([f for f in os.listdir(DOWNLOAD_DIR) if f.startswith("part_")])
+                    # اجرای دستور و بررسی خروجی
+                    result = subprocess.run(command, capture_output=True, text=True)
                     
+                    if result.returncode != 0:
+                        raise Exception(f"FFmpeg Error: {result.stderr}")
+
+                    # پیدا کردن پارت‌های تولید شده و مرتب کردن آن‌ها
+                    all_files = os.listdir(DOWNLOAD_DIR)
+                    parts = sorted([f for f in all_files if f.startswith("Part_") and clean_name in f])
+
                     for i, p_file in enumerate(parts, 1):
                         p_path = os.path.join(DOWNLOAD_DIR, p_file)
                         if chat_data.get('status') == 'cancelled': break
                         
+                        # ارسال هر پارت به عنوان یک ویدیوی مستقل
                         with open(p_path, 'rb') as tp:
-                            caption = f"🎬 {chat_data['current_filename']}\n📦 پارت {i}"
-                            if is_vid:
-                                await context.bot.send_video(
-                                    chat_id, video=tp, caption=caption,
-                                    supports_streaming=True, read_timeout=120, write_timeout=120
-                                )
-                            else:
-                                await context.bot.send_document(chat_id, document=tp, caption=caption)
+                            caption = f"🎬 پارت {i} از فایل:\n📄 `{chat_data['current_filename']}`"
+                            await context.bot.send_video(
+                                chat_id, video=tp, caption=caption,
+                                supports_streaming=True, 
+                                read_timeout=120, write_timeout=120
+                            )
                         
-                        os.remove(p_path) # حذف پارت بعد از ارسال
-                        await asyncio.sleep(2)
+                        os.remove(p_path) # حذف پارت بعد از ارسال برای خالی شدن فضا
+                        await asyncio.sleep(1.5) # وقفه کوتاه برای جلوگیری از بلاک شدن توسط تلگرام
                         
                 except Exception as e:
-                    logging.error(f"FFmpeg Error: {e}")
-                    await context.bot.send_message(chat_id, "❌ خطا در برش ویدئو. فایل به صورت خام ارسال می‌شود.")
+                    logging.error(f"Split Error: {e}")
+                    await context.bot.send_message(chat_id, f"❌ خطا در برش: {str(e)[:100]}")
             # --- پایان بخش هوشمند ---
 
             # --- شروع بخش ارسال تک فایل ---
