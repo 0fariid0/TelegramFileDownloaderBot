@@ -195,41 +195,55 @@ async def finalize_dl(chat_id, context, res):
     file_path = os.path.join(DOWNLOAD_DIR, chat_data['current_filename'])
     
     if res == "completed":
-        # افزایش شمارنده کاربر
         uid = str(chat_id)
         db["users"][uid]["downloads_today"] += 1
         save_db(db)
         
         await context.bot.edit_message_text("✅ دانلود تمام شد. در حال ارسال به تلگرام...", chat_id, chat_data['msg_id'])
         
-        # پارت‌بندی و ارسال
         if os.path.exists(file_path):
-            size = os.path.getsize(file_path)
-            if size > CHUNK_SIZE:
+            is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
+            
+            # --- بخش ارسال پارت‌بندی شده ---
+            if os.path.getsize(file_path) > CHUNK_SIZE:
                 part = 1
                 with open(file_path, 'rb') as f:
                     while True:
                         chunk = f.read(CHUNK_SIZE)
                         if not chunk: break
-                        with open("temp_part", "wb") as tp: tp.write(chunk)
-                        with open("temp_part", "rb") as tp:
-                            await context.bot.send_document(chat_id, document=tp, caption=f"📦 Part {part} | {chat_data['current_filename']}")
+                        
+                        temp_name = f"part_{part}_{chat_data['current_filename']}"
+                        with open(temp_name, "wb") as tp: tp.write(chunk)
+                        
+                        with open(temp_name, "rb") as tp:
+                            if is_vid:
+                                await context.bot.send_video(
+                                    chat_id, video=tp, 
+                                    caption=f"📦 Part {part} | {chat_data['current_filename']}",
+                                    supports_streaming=True
+                                )
+                            else:
+                                await context.bot.send_document(chat_id, document=tp, caption=f"📦 Part {part}")
+                        
+                        os.remove(temp_name)
                         part += 1
-                os.remove("temp_part")
+            
+            # --- بخش ارسال فایل تک پارت ---
             else:
-                is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
                 with open(file_path, 'rb') as f:
-                    if is_vid: await context.bot.send_video(chat_id, video=f, caption=chat_data['current_filename'], supports_streaming=True)
-                    else: await context.bot.send_document(chat_id, document=f, caption=chat_data['current_filename'])
+                    if is_vid:
+                        await context.bot.send_video(
+                            chat_id, video=f, 
+                            caption=chat_data['current_filename'], 
+                            supports_streaming=True
+                        )
+                    else:
+                        await context.bot.send_document(chat_id, document=f, caption=chat_data['current_filename'])
             
             os.remove(file_path)
         
         await context.bot.delete_message(chat_id, chat_data['msg_id'])
         await run_next(chat_id, context)
-    
-    elif res == "paused":
-        kb = [[InlineKeyboardButton("▶️ ادامه", callback_data="dl_resume"), InlineKeyboardButton("❌ لغو", callback_data="dl_cancel")]]
-        await context.bot.edit_message_text("⏸ دانلود متوقف شد.", chat_id, chat_data['msg_id'], reply_markup=InlineKeyboardMarkup(kb))
 
 async def callback_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
