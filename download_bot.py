@@ -50,12 +50,9 @@ db = load_db()
 
 def check_user(user_id):
     uid = str(user_id)
-    if uid not in db["users"]:
-        db[uid] = None  # defensive placeholder - will fix below
-    # normalize structure
-    users = db.get("users")
+    users = db.setdefault("users", {})
     if uid not in users:
-        users[uid] = {"downloads_today": 0, "last_reset": str(datetime.now().date()), "status": "active"}
+        users[uid] = {"downloads_today": 0, "last_reset": str(datetime.now().date()), "status": "active", "personal_limit": None}
         save_db(db)
 
     today = str(datetime.now().date())
@@ -186,11 +183,11 @@ async def download_engine(chat_id, context, url, filename):
                                 eta_txt = "نامشخص"
 
                             text = (
-                                f"📥 **در حال دریافت فایل...**\n\n"
-                                f"📄 `{filename}`\n"
-                                f"📊 {get_progress_bar(percent)} {percent:.1f}%\n"
-                                f"⚡️ سرعت: {human_readable_size(speed)}/s\n"
-                                f"📦 حجم: {size_txt}\n"
+                                f"📥 **در حال دریافت فایل...**\\n\\n"
+                                f"📄 `{filename}`\\n"
+                                f"📊 {get_progress_bar(percent)} {percent:.1f}%\\n"
+                                f"⚡️ سرعت: {human_readable_size(speed)}/s\\n"
+                                f"📦 حجم: {size_txt}\\n"
                                 f"⏳ زمان: {eta_txt}"
                             )
                             kb = [[InlineKeyboardButton("⏸ توقف", callback_data="dl_pause"),
@@ -206,36 +203,44 @@ async def download_engine(chat_id, context, url, filename):
             return str(e)
 
 
+# --- helpers for admin UI ---
+
+def get_admin_markup():
+    kb = [
+        [InlineKeyboardButton("📊 آمار و تاریخچه", callback_data="adm_history"), InlineKeyboardButton("👥 مدیریت کاربران", callback_data="adm_users:0")],
+        [InlineKeyboardButton("📂 فایل‌های دانلود شده", callback_data="adm_files"), InlineKeyboardButton("📥 فایل‌های در حال دانلود", callback_data="adm_active")],
+        [InlineKeyboardButton("⚙️ تنظیمات سیستم", callback_data="adm_settings"), InlineKeyboardButton("🧹 پاکسازی فایل‌ها", callback_data="adm_clear_confirm")],
+        [InlineKeyboardButton("📜 مشاهده لاگ (فایل)", callback_data="adm_logs"), InlineKeyboardButton("🔄 بازنشانی آمار کاربران", callback_data="adm_reset_stats")],
+        [InlineKeyboardButton("🔙 خروج", callback_data="adm_exit")]
+    ]
+    return InlineKeyboardMarkup(kb)
+
+
 # --- هندلرهای دستورات ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     check_user(user.id)
-    msg = "🚀 **خوش آمدید!**\n\nلینک مستقیم فایل را بفرستید تا برایتان دانلود و آپلود کنم."
+    msg = "🚀 **خوش آمدید!**\\n\\nلینک مستقیم فایل را بفرستید تا برایتان دانلود و آپلود کنم."
     if user.id == ADMIN_ID:
-        msg += "\n\n👨‍✈️ ادمین عزیز، برای مدیریت از /admin استفاده کنید."
+        msg += "\\n\\n👨‍✈️ ادمین عزیز، برای مدیریت از /admin استفاده کنید."
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 
 @admin_only
 async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stats = f"👥 تعداد کاربران: {len(db['users'])}\n⚙️ محدودیت روزانه: {db['settings']['daily_limit']} فایل"
-    kb = [
-        [InlineKeyboardButton("📊 آمار و تاریخچه", callback_data="adm_history"), InlineKeyboardButton("👥 مدیریت کاربران", callback_data="adm_users:0")],
-        [InlineKeyboardButton("🧹 پاکسازی فایل‌ها", callback_data="adm_clear_confirm"), InlineKeyboardButton("📜 مشاهده لاگ", callback_data="adm_logs")],
-        [InlineKeyboardButton("🔙 خروج", callback_data="adm_exit")]
-    ]
+    stats = f"👥 تعداد کاربران: {len(db['users'])}\\n⚙️ محدودیت روزانه: {db['settings']['daily_limit']} فایل"
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(f"🛠 **پنل مدیریت مدرن**\n\n{stats}", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await update.callback_query.edit_message_text(f"🛠 **پنل مدیریت مدرن**\\n\\n{stats}", reply_markup=get_admin_markup(), parse_mode='Markdown')
     else:
-        await update.message.reply_text(f"🛠 **پنل مدیریت مدرن**\n\n{stats}", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await update.message.reply_text(f"🛠 **پنل مدیریت مدرن**\\n\\n{stats}", reply_markup=get_admin_markup(), parse_mode='Markdown')
 
 
 # --- پردازش پیام و صف ---
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # بررسی اینکه آیا ادمین در حال تغییر تنظیمات است
+    # admin sets global limit (waiting_for_limit)
     if user_id == ADMIN_ID and context.user_data.get('waiting_for_limit'):
         if update.message.text.isdigit():
             new_limit = int(update.message.text)
@@ -246,6 +251,21 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             return await update.message.reply_text("❌ لطفاً فقط یک عدد انگلیسی ارسال کنید.")
 
+    # admin sets personal limit for a user
+    if user_id == ADMIN_ID and context.user_data.get('setting_user_limit_for'):
+        target_uid = context.user_data.get('setting_user_limit_for')
+        if update.message.text.isdigit():
+            new_limit = int(update.message.text)
+            if target_uid in db['users']:
+                db['users'][target_uid]['personal_limit'] = new_limit
+            else:
+                db['users'][target_uid] = {"downloads_today": 0, "last_reset": str(datetime.now().date()), "status": "active", "personal_limit": new_limit}
+            save_db(db)
+            context.user_data.pop('setting_user_limit_for', None)
+            return await update.message.reply_text(f"✅ محدودیت {new_limit} برای کاربر {target_uid} تنظیم شد.")
+        else:
+            return await update.message.reply_text("❌ لطفاً فقط یک عدد انگلیسی ارسال کنید.")
+
     u_data = check_user(user_id)
 
     if u_data["status"] == "banned":
@@ -253,9 +273,10 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     url = update.message.text
     if url and url.startswith("http"):
-        # بررسی محدودیت تعداد دانلود
-        if u_data["downloads_today"] >= db["settings"]["daily_limit"] and user_id != ADMIN_ID:
-            return await update.message.reply_text(f"⚠️ سقف دانلود روزانه شما ({db['settings']['daily_limit']}) تمام شده است.")
+        # بررسی محدودیت تعداد دانلود (اول شخصی، سپس کلی)
+        limit = u_data.get('personal_limit') if u_data.get('personal_limit') is not None else db['settings'].get('daily_limit', 5)
+        if u_data["downloads_today"] >= limit and user_id != ADMIN_ID:
+            return await update.message.reply_text(f"⚠️ سقف دانلود روزانه شما ({limit}) تمام شده است.")
 
         if 'queue' not in context.chat_data:
             context.chat_data['queue'] = deque()
@@ -297,7 +318,7 @@ async def finalize_dl(chat_id, context, res):
         initiator = str(chat_data.get('initiator_id', chat_id))
         # محافظت از اینکه اگر uid در db نیست، اضافه شود
         if initiator not in db['users']:
-            db['users'][initiator] = {"downloads_today": 0, "last_reset": str(datetime.now().date()), "status": "active"}
+            db['users'][initiator] = {"downloads_today": 0, "last_reset": str(datetime.now().date()), "status": "active", "personal_limit": None}
         db["users"][initiator]["downloads_today"] += 1
         save_db(db)
 
@@ -349,12 +370,11 @@ async def finalize_dl(chat_id, context, res):
                             break
 
                         if os.path.getsize(p_path) > 48 * 1024 * 1024:
-                            # در این نسخه ساده، اگر پارت باز هم بزرگ باشه از ارسال آن صرفنظر می‌کنیم
                             logging.warning(f"Part too large even after segmentation: {p_path}")
                             continue
 
                         with open(p_path, 'rb') as tp:
-                            caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {i} از {total}"
+                            caption = f"🎬 **{chat_data['current_filename']}**\\n📦 پارت {i} از {total}"
                             await context.bot.send_video(
                                 chat_id, video=tp, caption=caption,
                                 supports_streaming=True, parse_mode='Markdown',
@@ -369,7 +389,6 @@ async def finalize_dl(chat_id, context, res):
                     await context.bot.send_message(chat_id, "❌ متاسفانه به دلیل ساختار خاص این ویدیو، امکان برش هوشمند نبود.")
 
                 finally:
-                    # پاکسازی پوشه موقت به صورت غیرمسدود
                     def _rmdir(p):
                         import shutil
                         if os.path.exists(p):
@@ -401,6 +420,13 @@ async def finalize_dl(chat_id, context, res):
             await context.bot.delete_message(chat_id, chat_data['msg_id'])
         except Exception:
             pass
+
+        # اگر ادمین است، منوی ادمین را دوباره برایش بفرست
+        try:
+            await context.bot.send_message(ADMIN_ID, "🛠 پنل مدیریت (به‌روزرسانی)", reply_markup=get_admin_markup(), parse_mode='Markdown')
+        except Exception:
+            pass
+
         await run_next(chat_id, context)
 
     elif res == "cancelled":
@@ -411,7 +437,10 @@ async def finalize_dl(chat_id, context, res):
 
     else:
         # خطا
-        await context.bot.edit_message_text(f"❌ خطا: {res}", chat_id, chat_data.get('msg_id'))
+        try:
+            await context.bot.edit_message_text(f"❌ خطا: {res}", chat_id, chat_data.get('msg_id'))
+        except Exception:
+            await context.bot.send_message(chat_id, f"❌ خطا: {res}")
         await run_next(chat_id, context)
 
 
@@ -490,33 +519,39 @@ async def adm_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @register_admin_callback("adm_logs")
 async def adm_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ارسال فایل لاگ به عنوان فایل متنی (برای جلوگیری از خطای "Message is too long")
     if not os.path.exists(LOG_FILE):
         await update.callback_query.answer("❌ فایلی یافت نشد", show_alert=True)
         return
 
-    def tail_file(path, lines=200):
-        with open(path, 'rb') as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            block = 1024
-            data = b''
-            while size > 0 and data.count(b'\n') <= lines:
-                size = max(0, size - block)
-                f.seek(size)
-                chunk = f.read(block)
-                data = chunk + data
-                if size == 0:
-                    break
-            return data.decode(errors='ignore').splitlines()[-lines:]
+    try:
+        with open(LOG_FILE, 'rb') as f:
+            await update.callback_query.message.reply_document(document=f, caption="📜 فایل لاگ سیستم")
+    except Exception:
+        # در صورت مشکل، آخرین خطوط را نمایش بده
+        def tail_file(path, lines=200):
+            with open(path, 'rb') as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                block = 1024
+                data = b''
+                while size > 0 and data.count(b'\n') <= lines:
+                    size = max(0, size - block)
+                    f.seek(size)
+                    chunk = f.read(block)
+                    data = chunk + data
+                    if size == 0:
+                        break
+                return data.decode(errors='ignore').splitlines()[-lines:]
 
-    tail = await run_in_background(tail_file, LOG_FILE, 200)
-    await update.callback_query.message.reply_text(f"📜 آخرین خطوط لاگ:\n\n{chr(10).join(tail)}")
+        tail = await run_in_background(tail_file, LOG_FILE, 200)
+        await update.callback_query.message.reply_text(f"📜 آخرین خطوط لاگ:\n\n{chr(10).join(tail)}")
 
 
 @register_admin_callback("adm_history")
 async def adm_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_dl = sum(u['downloads_today'] for u in db['users'].values())
-    msg = f"📈 **آمار سیستم:**\n\nکل دانلودهای امروز: {total_dl}"
+    msg = f"📈 **آمار سیستم:**\\n\\nکل دانلودهای امروز: {total_dl}"
     kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]]
     await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
@@ -539,7 +574,8 @@ async def adm_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = []
     for uid, info in page_users:
         status = info.get('status', 'active')
-        btn_text = f"{uid} ({status})"
+        personal = info.get('personal_limit') if info.get('personal_limit') is not None else '-'
+        btn_text = f"{uid} ({status}) - limit: {personal}"
         kb.append([InlineKeyboardButton(btn_text, callback_data=f"adm_user:{uid}:{page}")])
 
     nav = []
@@ -561,9 +597,10 @@ async def adm_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = parts[1]
     page = int(parts[2]) if len(parts) > 2 else 0
     info = db['users'].get(uid, {})
-    msg = f"👤 کاربر: {uid}\nوضعیت: {info.get('status','active')}\nدانلود‌های امروز: {info.get('downloads_today',0)}"
+    msg = f"👤 کاربر: {uid}\\nوضعیت: {info.get('status','active')}\\nدانلود‌های امروز: {info.get('downloads_today',0)}\\nمحدودیت شخصی: {info.get('personal_limit', '-') }"
     kb = [
         [InlineKeyboardButton("⛔️ بلاک", callback_data=f"adm_ban:{uid}:{page}"), InlineKeyboardButton("✅ آنبلاک", callback_data=f"adm_unban:{uid}:{page}")],
+        [InlineKeyboardButton("🔢 تنظیم محدودیت کاربر", callback_data=f"adm_set_user_limit:{uid}:{page}" )],
         [InlineKeyboardButton("🔙 بازگشت", callback_data=f"adm_users:{page}")]
     ]
     await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
@@ -593,11 +630,59 @@ async def adm_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await adm_users(update, context)
 
 
+@register_admin_callback("adm_set_user_limit")
+async def adm_set_user_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    parts = update.callback_query.data.split(':')
+    uid = parts[1]
+    context.user_data['setting_user_limit_for'] = uid
+    await update.callback_query.edit_message_text(f"لطفاً عدد جدید محدودیت دانلود روزانه برای کاربر {uid} را ارسال کنید:",
+                                                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ انصراف", callback_data=f"adm_user:{uid}:0")]]))
+
+
+@register_admin_callback("adm_settings")
+async def adm_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = f"⚙️ تنظیمات سیستم:\n\nمحدودیت کلی فعلی: {db['settings'].get('daily_limit')}"
+    kb = [
+        [InlineKeyboardButton("🔢 تغییر محدودیت کلی", callback_data="adm_set_limit")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]
+    ]
+    await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+
+
 @register_admin_callback("adm_set_limit")
 async def adm_set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['waiting_for_limit'] = True
-    await update.callback_query.edit_message_text("لطفاً عدد جدید محدودیت دانلود روزانه را ارسال کنید:",
-                                                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ انصراف", callback_data="adm_users")]]))
+    await update.callback_query.edit_message_text("لطفاً عدد جدید محدودیت دانلود روزانه کلی را ارسال کنید:",
+                                                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ انصراف", callback_data="adm_settings")]]))
+
+
+@register_admin_callback("adm_files")
+async def adm_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    files = os.listdir(DOWNLOAD_DIR)
+    total_size = sum(os.path.getsize(os.path.join(DOWNLOAD_DIR, f)) for f in files)
+    msg = f"📂 فایل‌های دانلود شده: {len(files)}\\nحجم کل: {human_readable_size(total_size)}"
+    kb = [[InlineKeyboardButton("🧹 پاکسازی", callback_data="adm_clear_confirm")], [InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]]
+    await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+
+
+@register_admin_callback("adm_active")
+async def adm_active(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # نمایش وضعیت پوشه دانلود و محتویات صف چت ادمین (اگر وجود داشته باشد)
+    files = os.listdir(DOWNLOAD_DIR)
+    pending = len(files)
+    msg = f"📥 در حال دانلود / صف: {pending} فایل در پوشه دانلود (این عدد شامل فایل‌های کامل و پارت‌ها می‌شود)."
+    kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]]
+    await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+
+
+@register_admin_callback("adm_reset_stats")
+async def adm_reset_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    for uid in db['users']:
+        db['users'][uid]['downloads_today'] = 0
+        db['users'][uid]['last_reset'] = str(datetime.now().date())
+    save_db(db)
+    await update.callback_query.answer("آمار کاربران بازنشانی شد")
+    await adm_main(update, context)
 
 
 @register_admin_callback("adm_exit")
