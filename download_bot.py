@@ -15,11 +15,11 @@ from telegram.ext import (
 
 # --- تنظیمات و دیتابیس ساده ---
 try:
-    from bot_config import TOKEN
+    from bot_config import TOKEN, ADMIN_ID
 except ImportError:
     TOKEN = "YOUR_BOT_TOKEN_HERE"
+    ADMIN_ID = 0  # مقدار پیش‌فرض
 
-ADMIN_ID = 450281442  # آیدی عددی خود را وارد کنید
 DB_FILE = "users_db.json"
 LOG_FILE = "bot_log.txt"
 HISTORY_FILE = "download_history.txt"
