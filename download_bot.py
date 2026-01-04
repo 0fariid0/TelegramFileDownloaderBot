@@ -203,67 +203,82 @@ async def finalize_dl(chat_id, context, res):
         
         if os.path.exists(file_path):
             is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
-            
-            # --- بخش ارسال پارت‌بندی شده ---
-           # --- جایگزین بخش پارت‌بندی در تابع finalize_dl شود ---
-if os.path.getsize(file_path) > CHUNK_SIZE:
-    file_size = os.path.getsize(file_path)
-    part = 1
-    
-    with open(file_path, 'rb') as f:
-        while True:
-            chunk = f.read(CHUNK_SIZE)
-            if not chunk:
-                break
-            
-            # ایجاد نام منحصر به فرد برای هر پارت جهت جلوگیری از تداخل
-            temp_name = f"part_{part}_{chat_id}_{chat_data['current_filename']}"
-            with open(temp_name, "wb") as tp:
-                tp.write(chunk)
-            
-            # ارسال فایل
-            try:
-                with open(temp_name, "rb") as tp:
-                    if is_vid:
-                        await context.bot.send_video(
-                            chat_id, 
-                            video=tp, 
-                            caption=f"📦 پارت {part} از فایل:\n`{chat_data['current_filename']}`",
-                            supports_streaming=True,
-                            read_timeout=120, # افزایش زمان انتظار برای فایل‌های حجیم
-                            write_timeout=120
-                        )
-                    else:
-                        await context.bot.send_document(
-                            chat_id, 
-                            document=tp, 
-                            caption=f"📦 پارت {part}"
-                        )
-            finally:
-                # حذف فایل موقت بلافاصله پس از ارسال (حتی اگر خطا رخ دهد)
-                if os.path.exists(temp_name):
-                    os.remove(temp_name)
-            
-            part += 1
-            await asyncio.sleep(1) # وقفه کوتاه برای جلوگیری از Flood تلگرام
-            
-            # --- بخش ارسال فایل تک پارت ---
+            file_size = os.path.getsize(file_path)
+
+            # --- شروع بخش ارسال پارت‌بندی شده ---
+            if file_size > CHUNK_SIZE:
+                part = 1
+                with open(file_path, 'rb') as f:
+                    while True:
+                        # بررسی لغو عملیات توسط کاربر
+                        if chat_data.get('status') == 'cancelled':
+                            break
+                            
+                        chunk = f.read(CHUNK_SIZE)
+                        if not chunk: 
+                            break
+                        
+                        temp_name = f"part_{part}_{chat_id}_{chat_data['current_filename']}"
+                        with open(temp_name, "wb") as tp: 
+                            tp.write(chunk)
+                        
+                        try:
+                            with open(temp_name, "rb") as tp:
+                                if is_vid:
+                                    await context.bot.send_video(
+                                        chat_id, video=tp, 
+                                        caption=f"📦 پارت {part}\n📄 {chat_data['current_filename']}",
+                                        supports_streaming=True,
+                                        read_timeout=120, write_timeout=120
+                                    )
+                                else:
+                                    await context.bot.send_document(
+                                        chat_id, document=tp, 
+                                        caption=f"📦 پارت {part}",
+                                        read_timeout=120, write_timeout=120
+                                    )
+                        except Exception as e:
+                            logging.error(f"Error sending part {part}: {e}")
+                        finally:
+                            if os.path.exists(temp_name): 
+                                os.remove(temp_name)
+                        
+                        part += 1
+                        await asyncio.sleep(1.5) # جلوگیری از Flood تلگرام
+            # --- پایان بخش پارت‌بندی ---
+
+            # --- شروع بخش ارسال تک فایل ---
             else:
                 with open(file_path, 'rb') as f:
                     if is_vid:
                         await context.bot.send_video(
                             chat_id, video=f, 
                             caption=chat_data['current_filename'], 
-                            supports_streaming=True
+                            supports_streaming=True,
+                            read_timeout=120, write_timeout=120
                         )
                     else:
-                        await context.bot.send_document(chat_id, document=f, caption=chat_data['current_filename'])
+                        await context.bot.send_document(
+                            chat_id, document=f, 
+                            caption=chat_data['current_filename'],
+                            read_timeout=120, write_timeout=120
+                        )
             
-            os.remove(file_path)
+            # پاکسازی فایل اصلی پس از اتمام (یا لغو)
+            if os.path.exists(file_path):
+                os.remove(file_path)
         
-        await context.bot.delete_message(chat_id, chat_data['msg_id'])
+        try:
+            await context.bot.delete_message(chat_id, chat_data['msg_id'])
+        except:
+            pass
         await run_next(chat_id, context)
-
+    
+    elif res == "cancelled":
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        await run_next(chat_id, context)
+        
 async def callback_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
