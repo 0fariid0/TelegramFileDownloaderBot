@@ -183,11 +183,11 @@ async def download_engine(chat_id, context, url, filename):
                                 eta_txt = "نامشخص"
 
                             text = (
-                                f"📥 **در حال دریافت فایل...**\\n\\n"
-                                f"📄 `{filename}`\\n"
-                                f"📊 {get_progress_bar(percent)} {percent:.1f}%\\n"
-                                f"⚡️ سرعت: {human_readable_size(speed)}/s\\n"
-                                f"📦 حجم: {size_txt}\\n"
+                                f"📥 **در حال دریافت فایل...**\n\n"
+                                f"📄 `{filename}`\n"
+                                f"📊 {get_progress_bar(percent)} {percent:.1f}%\n"
+                                f"⚡️ سرعت: {human_readable_size(speed)}/s\n"
+                                f"📦 حجم: {size_txt}\n"
                                 f"⏳ زمان: {eta_txt}"
                             )
                             kb = [[InlineKeyboardButton("⏸ توقف", callback_data="dl_pause"),
@@ -220,20 +220,39 @@ def get_admin_markup():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     check_user(user.id)
-    msg = "🚀 **خوش آمدید!**\\n\\nلینک مستقیم فایل را بفرستید تا برایتان دانلود و آپلود کنم."
-    if user.id == ADMIN_ID:
-        msg += "\\n\\n👨‍✈️ ادمین عزیز، برای مدیریت از /admin استفاده کنید."
-    await update.message.reply_text(msg, parse_mode='Markdown')
 
+    # اگر ادمین هست، مستقیماً پنل مدیریت را باز کن (پیام خوش‌آمدگویی ادمین نمایش داده نمی‌شود)
+    if user.id == ADMIN_ID:
+        try:
+            if update.message:
+                await update.message.reply_text("👋 خوش آمدید ادمین — در حال باز کردن پنل مدیریت...")
+        except Exception:
+            pass
+        await admin_menu(update, context)
+        return
+
+    # پیام خوش‌آمدگویی زیباتر برای کاربران عادی (بدون اشاره به ادمین)
+    text = (
+        "🚀 *خوش آمدید به دانلودر هوشمند!*
+
+"
+        "📥 لینک مستقیم فایل را ارسال کنید تا ربات آن را دانلود و برایتان آپلود کند.
+"
+        "ℹ️ فایل‌های بزرگ‌تر از 50 مگ به صورت خودکار قطعه‌قطعه می‌شوند.
+
+"
+        "📌 برای راهنمایی بیشتر /help را ارسال کنید."
+    )
+    await update.message.reply_text(text, parse_mode='Markdown')
 
 @admin_only
 async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stats = f"👥 تعداد کاربران: {len(db['users'])}\\n⚙️ محدودیت روزانه: {db['settings']['daily_limit']} فایل"
+    stats = f"👥 تعداد کاربران: {len(db['users'])}\n⚙️ محدودیت روزانه: {db['settings']['daily_limit']} فایل"
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(f"🛠 **پنل مدیریت مدرن**\\n\\n{stats}", reply_markup=get_admin_markup(), parse_mode='Markdown')
+        await update.callback_query.edit_message_text(f"🛠 **پنل مدیریت مدرن**\n\n{stats}", reply_markup=get_admin_markup(), parse_mode='Markdown')
     else:
-        await update.message.reply_text(f"🛠 **پنل مدیریت مدرن**\\n\\n{stats}", reply_markup=get_admin_markup(), parse_mode='Markdown')
+        await update.message.reply_text(f"🛠 **پنل مدیریت مدرن**\n\n{stats}", reply_markup=get_admin_markup(), parse_mode='Markdown')
 
 
 # --- پردازش پیام و صف ---
@@ -374,7 +393,7 @@ async def finalize_dl(chat_id, context, res):
                             continue
 
                         with open(p_path, 'rb') as tp:
-                            caption = f"🎬 **{chat_data['current_filename']}**\\n📦 پارت {i} از {total}"
+                            caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {i} از {total}"
                             await context.bot.send_video(
                                 chat_id, video=tp, caption=caption,
                                 supports_streaming=True, parse_mode='Markdown',
@@ -535,7 +554,8 @@ async def adm_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 size = f.tell()
                 block = 1024
                 data = b''
-                while size > 0 and data.count(b'\n') <= lines:
+                while size > 0 and data.count(b'
+') <= lines:
                     size = max(0, size - block)
                     f.seek(size)
                     chunk = f.read(block)
@@ -545,13 +565,15 @@ async def adm_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return data.decode(errors='ignore').splitlines()[-lines:]
 
         tail = await run_in_background(tail_file, LOG_FILE, 200)
-        await update.callback_query.message.reply_text(f"📜 آخرین خطوط لاگ:\n\n{chr(10).join(tail)}")
+        await update.callback_query.message.reply_text(f"📜 آخرین خطوط لاگ:
+
+{chr(10).join(tail)}")
 
 
 @register_admin_callback("adm_history")
 async def adm_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_dl = sum(u['downloads_today'] for u in db['users'].values())
-    msg = f"📈 **آمار سیستم:**\\n\\nکل دانلودهای امروز: {total_dl}"
+    msg = f"📈 **آمار سیستم:**\n\nکل دانلودهای امروز: {total_dl}"
     kb = [[InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]]
     await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
@@ -597,7 +619,7 @@ async def adm_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = parts[1]
     page = int(parts[2]) if len(parts) > 2 else 0
     info = db['users'].get(uid, {})
-    msg = f"👤 کاربر: {uid}\\nوضعیت: {info.get('status','active')}\\nدانلود‌های امروز: {info.get('downloads_today',0)}\\nمحدودیت شخصی: {info.get('personal_limit', '-') }"
+    msg = f"👤 کاربر: {uid}\nوضعیت: {info.get('status','active')}\nدانلود‌های امروز: {info.get('downloads_today',0)}\nمحدودیت شخصی: {info.get('personal_limit', '-') }"
     kb = [
         [InlineKeyboardButton("⛔️ بلاک", callback_data=f"adm_ban:{uid}:{page}"), InlineKeyboardButton("✅ آنبلاک", callback_data=f"adm_unban:{uid}:{page}")],
         [InlineKeyboardButton("🔢 تنظیم محدودیت کاربر", callback_data=f"adm_set_user_limit:{uid}:{page}" )],
@@ -641,7 +663,9 @@ async def adm_set_user_limit(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @register_admin_callback("adm_settings")
 async def adm_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = f"⚙️ تنظیمات سیستم:\n\nمحدودیت کلی فعلی: {db['settings'].get('daily_limit')}"
+    msg = f"⚙️ تنظیمات سیستم:
+
+محدودیت کلی فعلی: {db['settings'].get('daily_limit')}"
     kb = [
         [InlineKeyboardButton("🔢 تغییر محدودیت کلی", callback_data="adm_set_limit")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]
@@ -660,7 +684,7 @@ async def adm_set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     files = os.listdir(DOWNLOAD_DIR)
     total_size = sum(os.path.getsize(os.path.join(DOWNLOAD_DIR, f)) for f in files)
-    msg = f"📂 فایل‌های دانلود شده: {len(files)}\\nحجم کل: {human_readable_size(total_size)}"
+    msg = f"📂 فایل‌های دانلود شده: {len(files)}\nحجم کل: {human_readable_size(total_size)}"
     kb = [[InlineKeyboardButton("🧹 پاکسازی", callback_data="adm_clear_confirm")], [InlineKeyboardButton("🔙 بازگشت", callback_data="adm_main")]]
     await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
