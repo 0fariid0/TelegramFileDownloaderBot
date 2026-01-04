@@ -115,14 +115,9 @@ async def download_engine(chat_id, context, url, filename):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     check_user(user.id)
-    
-    # شناسایی خودکار ادمین و نمایش پنل
-    if user.id == ADMIN_ID:
-        # فراخوانی مستقیم تابع پنل ادمین
-        return await admin_menu(update, context)
-    
-    # پیام برای کاربران معمولی
     msg = "🚀 **خوش آمدید!**\n\nلینک مستقیم فایل را بفرستید تا برایتان دانلود و آپلود کنم."
+    if user.id == ADMIN_ID:
+        msg += "\n\n👨‍✈️ ادمین عزیز، برای مدیریت از /admin استفاده کنید."
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -210,28 +205,47 @@ async def finalize_dl(chat_id, context, res):
             is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
             
             # --- بخش ارسال پارت‌بندی شده ---
-            if os.path.getsize(file_path) > CHUNK_SIZE:
-                part = 1
-                with open(file_path, 'rb') as f:
-                    while True:
-                        chunk = f.read(CHUNK_SIZE)
-                        if not chunk: break
-                        
-                        temp_name = f"part_{part}_{chat_data['current_filename']}"
-                        with open(temp_name, "wb") as tp: tp.write(chunk)
-                        
-                        with open(temp_name, "rb") as tp:
-                            if is_vid:
-                                await context.bot.send_video(
-                                    chat_id, video=tp, 
-                                    caption=f"📦 Part {part} | {chat_data['current_filename']}",
-                                    supports_streaming=True
-                                )
-                            else:
-                                await context.bot.send_document(chat_id, document=tp, caption=f"📦 Part {part}")
-                        
-                        os.remove(temp_name)
-                        part += 1
+           # --- جایگزین بخش پارت‌بندی در تابع finalize_dl شود ---
+if os.path.getsize(file_path) > CHUNK_SIZE:
+    file_size = os.path.getsize(file_path)
+    part = 1
+    
+    with open(file_path, 'rb') as f:
+        while True:
+            chunk = f.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            
+            # ایجاد نام منحصر به فرد برای هر پارت جهت جلوگیری از تداخل
+            temp_name = f"part_{part}_{chat_id}_{chat_data['current_filename']}"
+            with open(temp_name, "wb") as tp:
+                tp.write(chunk)
+            
+            # ارسال فایل
+            try:
+                with open(temp_name, "rb") as tp:
+                    if is_vid:
+                        await context.bot.send_video(
+                            chat_id, 
+                            video=tp, 
+                            caption=f"📦 پارت {part} از فایل:\n`{chat_data['current_filename']}`",
+                            supports_streaming=True,
+                            read_timeout=120, # افزایش زمان انتظار برای فایل‌های حجیم
+                            write_timeout=120
+                        )
+                    else:
+                        await context.bot.send_document(
+                            chat_id, 
+                            document=tp, 
+                            caption=f"📦 پارت {part}"
+                        )
+            finally:
+                # حذف فایل موقت بلافاصله پس از ارسال (حتی اگر خطا رخ دهد)
+                if os.path.exists(temp_name):
+                    os.remove(temp_name)
+            
+            part += 1
+            await asyncio.sleep(1) # وقفه کوتاه برای جلوگیری از Flood تلگرام
             
             # --- بخش ارسال فایل تک پارت ---
             else:
