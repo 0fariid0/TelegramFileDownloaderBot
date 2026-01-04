@@ -2,26 +2,39 @@
 set -e
 
 SERVICE_NAME="telegramdownloaderbot"
+CONFIG_FILE="bot_config.py"
 
+# دریافت اطلاعات از کاربر
 read -p "Enter your Telegram Bot Token: " bot_token
-echo "TOKEN = \"$bot_token\"" > bot_config.py
-echo "✅ Bot token saved to bot_config.py"
+read -p "Enter your Numerical Admin ID: " admin_id
 
-echo "Installing system dependencies (python3-venv, git)..."
+# ذخیره در فایل کانفیگ
+cat > "$CONFIG_FILE" <<EOF
+TOKEN = "$bot_token"
+ADMIN_ID = $admin_id
+EOF
+
+echo "✅ Configuration saved to $CONFIG_FILE"
+
+echo "Installing system dependencies..."
 apt update -y > /dev/null
 apt install python3-venv git -y > /dev/null
 
-echo "Creating Python virtual environment and installing dependencies..."
+echo "Creating Python virtual environment..."
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip wheel > /dev/null
-pip install -r requirements.txt > /dev/null
+# نصب کتابخانه‌های مورد نیاز (اگر requirements.txt وجود ندارد، دستی نصب می‌شوند)
+if [ -f "requirements.txt" ]; then
+    pip install -r requirements.txt > /dev/null
+else
+    pip install python-telegram-bot httpx > /dev/null
+fi
 deactivate
-echo "✅ Python dependencies installed."
+echo "✅ Dependencies installed."
 
-echo "Creating systemd service file for $SERVICE_NAME..."
+echo "Creating systemd service file..."
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
-
 INSTALL_DIR=$(pwd)
 PYTHON_EXEC="$INSTALL_DIR/venv/bin/python"
 PYTHON_SCRIPT_PATH="$INSTALL_DIR/download_bot.py"
@@ -44,11 +57,9 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-echo "Reloading systemd, enabling and starting $SERVICE_NAME..."
+echo "Starting service..."
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
-echo "✅ Installation and setup completed successfully."
-echo "📡 Check bot status with: sudo systemctl status $SERVICE_NAME"
-echo "📖 View bot logs with: sudo journalctl -u $SERVICE_NAME -f"
+echo "✅ Installation completed successfully."
