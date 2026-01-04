@@ -206,77 +206,80 @@ async def finalize_dl(chat_id, context, res):
             file_size = os.path.getsize(file_path)
 
             # --- شروع بخش برش بر اساس حجم ۴۰ مگابایت ---
-if file_size > CHUNK_SIZE:
-    await context.bot.edit_message_text("✂️ در حال قطعه‌قطعه کردن هوشمند ویدیو (۴۰ مگابایتی)...", chat_id, chat_data['msg_id'])
-    
-    base_name, extension = os.path.splitext(chat_data['current_filename'])
-    if not extension: extension = ".mp4"
-    clean_name = "".join([c for c in base_name if c.isalnum()]).strip()
-    
-    temp_parts_dir = os.path.join(DOWNLOAD_DIR, f"parts_{chat_id}_{int(time.time())}")
-    os.makedirs(temp_parts_dir, exist_ok=True)
-
-    import subprocess
-    try:
-        # تنظیم دقیق روی 40 مگابایت (به بایت)
-        # 40 * 1024 * 1024 = 41943040 bytes
-        output_template = os.path.join(temp_parts_dir, f"Part_%03d_{clean_name}{extension}")
-        
-        command = [
-            'ffmpeg', '-y', '-i', file_path,
-            '-fs', '41943040', # محدودیت حجم هر پارت روی دقیقا 40 مگابایت
-            '-map', '0',
-            '-c', 'copy',      # کپی بدون انکود مجدد (بسیار سریع)
-            '-f', 'segment',
-            '-segment_size', '41943040', # برش بر اساس سایز
-            '-reset_timestamps', '1',
-            output_template
-        ]
-        
-        # اجرای دستور FFmpeg
-        subprocess.run(command, capture_output=True, check=True)
-        
-        # خواندن لیست پارت‌های تولید شده
-        generated_parts = sorted([f for f in os.listdir(temp_parts_dir) if f.startswith("Part_")])
-
-        if not generated_parts:
-            raise Exception("هیچ پارتی ایجاد نشد.")
-
-        total = len(generated_parts)
-        for i, p_file in enumerate(generated_parts, 1):
-            p_path = os.path.join(temp_parts_dir, p_file)
-            
-            # چک کردن برای لغو عملیات توسط کاربر
-            if chat_data.get('status') == 'cancelled': 
-                break
-            
-            # ارسال ویدیو
-            with open(p_path, 'rb') as tp:
-                caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {i} از {total} (حجم زیر ۴۰ مگ)"
+            if file_size > CHUNK_SIZE:
+                await context.bot.edit_message_text("✂️ در حال قطعه‌قطعه کردن ویدیو (۴۰ مگابایتی)...", chat_id, chat_data['msg_id'])
                 
-                await context.bot.send_video(
-                    chat_id, 
-                    video=tp, 
-                    caption=caption,
-                    supports_streaming=True, 
-                    parse_mode='Markdown',
-                    read_timeout=300, 
-                    write_timeout=300
-                )
-            
-            # حذف پارت ارسال شده برای آزاد سازی فضا
-            os.remove(p_path)
-            await asyncio.sleep(1.5) # وقفه کوتاه برای جلوگیری از اسپم
+                base_name, extension = os.path.splitext(chat_data['current_filename'])
+                if not extension: extension = ".mp4"
+                clean_name = "".join([c for c in base_name if c.isalnum()]).strip()
+                
+                temp_parts_dir = os.path.join(DOWNLOAD_DIR, f"parts_{chat_id}_{int(time.time())}")
+                os.makedirs(temp_parts_dir, exist_ok=True)
 
-    except Exception as e:
-        logging.error(f"Error during splitting: {e}")
-        await context.bot.send_message(chat_id, "❌ خطا در برش ویدیو. لطفا دوباره تلاش کنید.")
-    
-    finally:
-        import shutil
-        if os.path.exists(temp_parts_dir): 
-            shutil.rmtree(temp_parts_dir)
-# --- پایان بخش برش ---
+                import subprocess
+                try:
+                    # FFmpeg command to segment by size (approx 40MB)
+                    output_template = os.path.join(temp_parts_dir, f"Part_%03d_{clean_name}{extension}")
+                    
+                    command = [
+                        'ffmpeg', '-y', '-i', file_path,
+                        '-c', 'copy',
+                        '-map', '0',
+                        '-segment_size', '41943040', # 40MB
+                        '-f', 'segment',
+                        '-reset_timestamps', '1',
+                        output_template
+                    ]
+                    
+                    subprocess.run(command, capture_output=True, check=True)
+                    
+                    generated_parts = sorted([f for f in os.listdir(temp_parts_dir) if f.startswith("Part_")])
+
+                    if not generated_parts:
+                        raise Exception("No parts created")
+
+                    total = len(generated_parts)
+                    for i, p_file in enumerate(generated_parts, 1):
+                        p_path = os.path.join(temp_parts_dir, p_file)
+                        
+                        if chat_data.get('status') == 'cancelled':
+                            break
+                        
+                        with open(p_path, 'rb') as tp:
+                            caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {i} از {total} (حجم ۴۰ مگ)"
+                            
+                            await context.bot.send_video(
+                                chat_id, 
+                                video=tp, 
+                                caption=caption,
+                                supports_streaming=True, 
+                                parse_mode='Markdown',
+                                read_timeout=300, 
+                                write_timeout=300
+                            )
+                        
+                        os.remove(p_path)
+                        await asyncio.sleep(2)
+
+                except Exception as e:
+                    logging.error(f"Splitting Error: {e}")
+                    await context.bot.send_message(chat_id, "❌ خطا در عملیات برش فایل.")
+                
+                finally:
+                    import shutil
+                    if os.path.exists(temp_parts_dir):
+                        shutil.rmtree(temp_parts_dir)
+            
+            else:
+                # این بخشی است که احتمالا در کد قبلی شما جابجا شده بود
+                # ارسال فایل به صورت معمولی اگر حجمش زیر حد مجاز است
+                with open(file_path, 'rb') as v:
+                    await context.bot.send_video(
+                        chat_id, video=v, 
+                        caption=f"🎬 {chat_data['current_filename']}",
+                        supports_streaming=True
+                    )
+            # --- پایان بخش برش ---
 
             # --- شروع بخش ارسال تک فایل ---
             else:
