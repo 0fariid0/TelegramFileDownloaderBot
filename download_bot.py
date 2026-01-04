@@ -205,75 +205,50 @@ async def finalize_dl(chat_id, context, res):
             is_vid = chat_data['current_filename'].lower().endswith(VIDEO_EXTS)
             file_size = os.path.getsize(file_path)
 
-            # --- شروع بخش برش نهایی و قطعی ---
+            # --- شروع بخش برش قطعی (Binary Split) ---
             if file_size > CHUNK_SIZE:
-                await context.bot.edit_message_text("✂️ در حال قطعه‌قطعه کردن ویدیو (این کار ممکن است کمی طول بکشد)...", chat_id, chat_data['msg_id'])
+                await context.bot.edit_message_text("✂️ در حال برش دقیق فایل به قطعات استاندارد...", chat_id, chat_data['msg_id'])
                 
-                base_name, extension = os.path.splitext(chat_data['current_filename'])
-                if not extension: extension = ".mp4"
-                clean_name = "".join([c for c in base_name if c.isalnum()]).strip()
+                # تنظیم حجم هر پارت روی 48 مگابایت برای امنیت کامل
+                part_size = 48 * 1024 * 1024 
+                part_num = 1
                 
-                # ایجاد پوشه موقت
-                temp_parts_dir = os.path.join(DOWNLOAD_DIR, f"parts_{chat_id}_{int(time.time())}")
-                os.makedirs(temp_parts_dir, exist_ok=True)
-
-                import subprocess
                 try:
-                    # استفاده از متد تقسیم زمانی که بسیار پایدارتر است
-                    # هر پارت را حدود 8 دقیقه در نظر می‌گیریم تا قطعا زیر 50 مگابایت بماند
-                    output_template = os.path.join(temp_parts_dir, f"Part_%03d_{clean_name}{extension}")
-                    
-                    command = [
-                        'ffmpeg', '-y', '-i', file_path,
-                        '-force_key_frames', 'expr:gte(t,n_forced*60)', # اجبار به ایجاد فریم کلیدی در هر دقیقه
-                        '-f', 'segment',
-                        '-segment_time', '00:08:00', # برش‌های 8 دقیقه‌ای
-                        '-reset_timestamps', '1',
-                        '-map', '0',
-                        '-c', 'copy', # ابتدا سعی می‌کند کپی کند
-                        output_template
-                    ]
-                    
-                    # اجرای دستور
-                    subprocess.run(command, capture_output=True, check=True)
-                    
-                    # خواندن پارت‌ها
-                    generated_parts = sorted([f for f in os.listdir(temp_parts_dir) if f.startswith("Part_")])
-
-                    if not generated_parts:
-                        raise Exception("No parts created")
-
-                    total = len(generated_parts)
-                    for i, p_file in enumerate(generated_parts, 1):
-                        p_path = os.path.join(temp_parts_dir, p_file)
-                        if chat_data.get('status') == 'cancelled': break
-                        
-                        # اگر پارتی به هر دلیل باز هم بزرگتر از 49 مگابایت بود
-                        if os.path.getsize(p_path) > 49 * 1024 * 1024:
-                            # این پارت را دوباره به دو نیم تقسیم کن (فقط برای اطمینان)
-                            continue 
-
-                        with open(p_path, 'rb') as tp:
-                            caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {i} از {total}"
+                    with open(file_path, 'rb') as f:
+                        while True:
+                            chunk = f.read(part_size)
+                            if not chunk:
+                                break
                             
-                            # ارسال
-                            await context.bot.send_video(
-                                chat_id, video=tp, caption=caption,
-                                supports_streaming=True, parse_mode='Markdown',
-                                read_timeout=300, write_timeout=300
+                            # ایجاد نام پارت
+                            p_name = f"Part_{part_num}_{chat_data['current_filename']}"
+                            
+                            # ارسال مستقیم از حافظه (بدون نیاز به ذخیره موقت روی دیسک)
+                            # این روش هم سریع‌تر است و هم خطای فایل ندارد
+                            from io import BytesIO
+                            part_file = BytesIO(chunk)
+                            part_file.name = p_name
+                            
+                            caption = f"🎬 **{chat_data['current_filename']}**\n📦 پارت {part_num}"
+                            
+                            # ارسال به صورت فایل (Document) چون در برش باینری ویدیو پلیر تلگرام ممکن است در پارت‌های وسطی کار نکند
+                            await context.bot.send_document(
+                                chat_id, 
+                                document=part_file, 
+                                caption=caption,
+                                parse_mode='Markdown',
+                                read_timeout=300, 
+                                write_timeout=300
                             )
-                        
-                        os.remove(p_path)
-                        await asyncio.sleep(2)
-
-                except Exception as e:
-                    logging.error(f"Final Attempt Error: {e}")
-                    # راه حل آخر: اگر FFmpeg کلا شکست خورد، فایل را به صورت داکیومنت با پایتون تکه کن
-                    await context.bot.send_message(chat_id, "❌ متاسفانه به دلیل ساختار خاص این ویدیو، امکان برش هوشمند نبود.")
+                            
+                            part_num += 1
+                            await asyncio.sleep(2) # وقفه برای جلوگیری از محدودیت تلگرام
+                            
+                    await context.bot.send_message(chat_id, "✅ تمام پارت‌ها با موفقیت ارسال شدند.")
                 
-                finally:
-                    import shutil
-                    if os.path.exists(temp_parts_dir): shutil.rmtree(temp_parts_dir)
+                except Exception as e:
+                    logging.error(f"Binary Split Error: {e}")
+                    await context.bot.send_message(chat_id, "❌ خطا در ارسال پارت‌ها.")
             # --- پایان بخش برش ---
 
             # --- شروع بخش ارسال تک فایل ---
